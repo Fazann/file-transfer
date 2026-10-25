@@ -1,0 +1,19 @@
+[package]
+name = "lanshare-core"
+description = "Networking, transfer, discovery and security logic for LanShare."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+postcard = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,32 @@
+docs/*
+
+# Rust build output (Cargo.lock is kept: this repo ships binaries)
+/target
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+
+# Default folder used by `lanshare receive` when run from the repo
+/downloads
+
+# Frontend (phase 6)
+node_modules/
+/app/dist
+/app/src-tauri/target
+/app/src-tauri/gen
+
+# Logs and local env files
+*.log
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*~

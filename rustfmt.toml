@@ -1,0 +1,8 @@
+edition = "2021"
+max_width = 120
+use_small_heuristics = "Max"
+newline_style = "Unix"
+# Nightly-only options. Always format with `cargo +nightly fmt`.
+group_imports = "StdExternalCrate"
+imports_granularity = "Crate"
+reorder_imports = true
