@@ -1,9 +1,10 @@
 //! Length-prefixed framing: each frame is a big-endian `u32` payload length followed by a `postcard`-encoded
 //! [`Message`].
 
+use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use super::Message;
+use super::{Message, PROTOCOL_VERSION};
 use crate::error::{Error, Result};
 
 /// Largest allowed frame payload in bytes (1 MiB). Larger frames are a protocol violation.
@@ -37,8 +38,9 @@ where
 ///
 /// # Errors
 ///
-/// [`Error::ProtocolViolation`] for frames larger than [`MAX_FRAME_SIZE`] or payloads that do not decode,
-/// [`Error::ConnectionLost`] if the stream ends mid-frame, or another I/O error from the reader.
+/// - [`Error::VersionMismatch`] if the payload does not decode but starts like a `Hello` from another version
+/// - [`Error::ProtocolViolation`] for frames larger than [`MAX_FRAME_SIZE`] or other payloads that do not decode
+/// - [`Error::ConnectionLost`] if the stream ends mid-frame, or another I/O error from the reader
 pub async fn read_message<R>(reader: &mut R) -> Result<Message>
 where
     R: AsyncRead + Unpin,
@@ -49,7 +51,26 @@ where
     }
     let mut payload = vec![0; length as usize];
     reader.read_exact(&mut payload).await?;
-    postcard::from_bytes(&payload).map_err(|error| Error::protocol_violation(format!("cannot decode message: {error}")))
+    postcard::from_bytes(&payload).map_err(|error| match peek_hello_version(&payload) {
+        Some(theirs) if theirs != PROTOCOL_VERSION => Error::VersionMismatch { ours: PROTOCOL_VERSION, theirs },
+        _ => Error::protocol_violation(format!("cannot decode message: {error}")),
+    })
+}
+
+/// Only the part of `Hello` that never changes between versions: variant 0, first field `protocol_version`.
+#[derive(Deserialize)]
+enum HelloVersion {
+    Hello { protocol_version: u16 },
+}
+
+/// Reads the protocol version from a `Hello` whose remaining fields this version cannot decode.
+///
+/// `take_from_bytes` decodes a prefix and ignores the rest, unlike `from_bytes` which requires every byte to match.
+fn peek_hello_version(payload: &[u8]) -> Option<u16> {
+    match postcard::take_from_bytes::<HelloVersion>(payload) {
+        Ok((HelloVersion::Hello { protocol_version }, _rest)) => Some(protocol_version),
+        Err(_) => None,
+    }
 }
 
 #[cfg(test)]
@@ -57,12 +78,12 @@ mod tests {
     use tokio::io::duplex;
 
     use super::*;
-    use crate::error::ErrorCode;
+    use crate::{error::ErrorCode, identity::DeviceId};
 
     #[tokio::test]
     async fn every_message_round_trips() {
         let messages = [
-            Message::Hello { device_name: "laptop".into(), protocol_version: 1 },
+            Message::Hello { protocol_version: 2, device_id: DeviceId::new_random(), device_name: "laptop".into() },
             Message::Offer { file_name: "movie.mkv".into(), size: 50 * 1024 * 1024 * 1024 },
             Message::Accept,
             Message::Reject { code: ErrorCode::VersionMismatch { ours: 1, theirs: 2 } },
@@ -101,6 +122,17 @@ mod tests {
         client.write_all(&[0xff, 0xff]).await.unwrap();
         let error = read_message(&mut server).await.unwrap_err();
         assert_eq!(error.code(), ErrorCode::ProtocolViolation);
+    }
+
+    #[tokio::test]
+    async fn hello_from_another_layout_reports_version_mismatch() {
+        let (mut client, mut server) = duplex(64);
+        // Variant 0 (`Hello`), varint version 99, then fields this version cannot decode.
+        let payload = [0, 99, 0xff, 0xff, 0xff];
+        client.write_u32(5).await.unwrap();
+        client.write_all(&payload).await.unwrap();
+        let error = read_message(&mut server).await.unwrap_err();
+        assert_eq!(error.code(), ErrorCode::VersionMismatch { ours: PROTOCOL_VERSION, theirs: 99 });
     }
 
     #[tokio::test]

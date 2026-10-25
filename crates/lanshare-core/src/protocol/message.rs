@@ -2,20 +2,22 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::ErrorCode;
+use crate::{error::ErrorCode, identity::DeviceId};
 
 /// One framed protocol message.
 ///
-/// The variant order is part of the wire format. `Hello` must stay the first variant with the same fields forever,
-/// so peers on any version can decode it and report a version mismatch.
+/// The variant order is part of the wire format. `Hello` must stay the first variant and `protocol_version` must stay
+/// its first field forever, so any version can read the peer's version and report a mismatch (see `frame.rs`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Message {
     /// First message from the sender.
     Hello {
+        /// The sender's [`PROTOCOL_VERSION`](super::PROTOCOL_VERSION). Always the first field.
+        protocol_version: u16,
+        /// Stable id of the sending device.
+        device_id: DeviceId,
         /// Human-readable name of the sending device.
         device_name: String,
-        /// The sender's [`PROTOCOL_VERSION`](super::PROTOCOL_VERSION).
-        protocol_version: u16,
     },
     /// The sender offers one file.
     Offer {

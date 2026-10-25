@@ -2,4 +2,4 @@
 
 mod tcp;
 
-pub use tcp::{connect, listen, CONNECT_TIMEOUT, DEFAULT_PORT};
+pub use tcp::{connect, connect_any, listen, CONNECT_TIMEOUT, DEFAULT_PORT, PEER_ADDRESS_TIMEOUT};

@@ -11,6 +11,7 @@ use std::{
 };
 
 use lanshare_core::{
+    identity::{DeviceId, DeviceInfo, Os},
     protocol::{read_message, write_message, Message, PROTOCOL_VERSION},
     transfer::{progress_channel, receive_file, send_file, IncomingOffer, OfferDecider, ReceiveOutcome},
     transport, Error, ErrorCode,
@@ -42,10 +43,24 @@ fn spawn_receiver(listener: TcpListener, dir: PathBuf, accept: bool) -> JoinHand
     })
 }
 
+fn sender_info() -> DeviceInfo {
+    DeviceInfo {
+        id: DeviceId::new_random(),
+        name: "test-sender".into(),
+        os: Os::current(),
+        port: 0,
+        protocol_version: PROTOCOL_VERSION,
+    }
+}
+
+fn hello(device_name: &str, protocol_version: u16) -> Message {
+    Message::Hello { protocol_version, device_id: DeviceId::new_random(), device_name: device_name.into() }
+}
+
 async fn send(addr: SocketAddr, file: &Path) -> Result<(), Error> {
     let mut stream = transport::connect(addr).await.unwrap();
     let (progress, _watcher) = progress_channel();
-    send_file(&mut stream, file, "test-sender", &progress).await
+    send_file(&mut stream, file, &sender_info(), &progress).await
 }
 
 /// Writes `size` bytes of deterministic pseudo-random data, 1 MiB at a time.
@@ -150,10 +165,24 @@ async fn version_mismatch_is_rejected() {
 
     let future_version = PROTOCOL_VERSION + 1;
     let mut stream = transport::connect(addr).await.unwrap();
-    let hello = Message::Hello { device_name: "future".into(), protocol_version: future_version };
-    write_message(&mut stream, &hello).await.unwrap();
+    write_message(&mut stream, &hello("future", future_version)).await.unwrap();
 
     let expected = ErrorCode::VersionMismatch { ours: PROTOCOL_VERSION, theirs: future_version };
+    assert_eq!(read_message(&mut stream).await.unwrap(), Message::Reject { code: expected.clone() });
+    assert_eq!(receiver.await.unwrap().unwrap_err().code(), expected);
+}
+
+#[tokio::test]
+async fn hello_with_unknown_layout_is_rejected_as_version_mismatch() {
+    let (_source_dir, download_dir) = dirs();
+    let (listener, addr) = local_listener().await;
+    let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
+
+    // A `Hello` from a future version whose fields after `protocol_version` this version cannot decode.
+    let mut stream = transport::connect(addr).await.unwrap();
+    tokio::io::AsyncWriteExt::write_all(&mut stream, &[0, 0, 0, 4, 0, 99, 0xff, 0xff]).await.unwrap();
+
+    let expected = ErrorCode::VersionMismatch { ours: PROTOCOL_VERSION, theirs: 99 };
     assert_eq!(read_message(&mut stream).await.unwrap(), Message::Reject { code: expected.clone() });
     assert_eq!(receiver.await.unwrap().unwrap_err().code(), expected);
 }
@@ -165,8 +194,7 @@ async fn unsafe_file_name_is_rejected() {
     let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
 
     let mut stream = transport::connect(addr).await.unwrap();
-    let hello = Message::Hello { device_name: "attacker".into(), protocol_version: PROTOCOL_VERSION };
-    write_message(&mut stream, &hello).await.unwrap();
+    write_message(&mut stream, &hello("attacker", PROTOCOL_VERSION)).await.unwrap();
     write_message(&mut stream, &Message::Offer { file_name: "../..".into(), size: 1 }).await.unwrap();
 
     let reply = read_message(&mut stream).await.unwrap();
@@ -181,8 +209,7 @@ async fn dropped_connection_deletes_partial_file() {
     let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
 
     let mut stream = transport::connect(addr).await.unwrap();
-    let hello = Message::Hello { device_name: "flaky".into(), protocol_version: PROTOCOL_VERSION };
-    write_message(&mut stream, &hello).await.unwrap();
+    write_message(&mut stream, &hello("flaky", PROTOCOL_VERSION)).await.unwrap();
     write_message(&mut stream, &Message::Offer { file_name: "partial.bin".into(), size: 1000 }).await.unwrap();
     assert_eq!(read_message(&mut stream).await.unwrap(), Message::Accept);
     tokio::io::AsyncWriteExt::write_all(&mut stream, &[7u8; 10]).await.unwrap();

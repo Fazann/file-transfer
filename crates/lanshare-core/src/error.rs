@@ -36,6 +36,8 @@ pub enum ErrorCode {
     ConnectionLost,
     /// The transfer was cancelled.
     Cancelled,
+    /// None of the peer's addresses accepted a connection.
+    PeerUnreachable,
 }
 
 impl ErrorCode {
@@ -52,6 +54,7 @@ impl ErrorCode {
             Self::ProtocolViolation => "PROTOCOL_VIOLATION",
             Self::ConnectionLost => "CONNECTION_LOST",
             Self::Cancelled => "CANCELLED",
+            Self::PeerUnreachable => "PEER_UNREACHABLE",
         }
     }
 }
@@ -91,6 +94,9 @@ pub enum Error {
     /// The transfer was cancelled.
     #[error("CANCELLED")]
     Cancelled,
+    /// None of the peer's addresses accepted a connection.
+    #[error("PEER_UNREACHABLE")]
+    PeerUnreachable,
     /// The peer reported an error that has no more specific local variant.
     #[error("PEER: {}", code.name())]
     Peer {
@@ -111,6 +117,7 @@ impl Error {
             Self::ProtocolViolation { .. } => ErrorCode::ProtocolViolation,
             Self::ConnectionLost => ErrorCode::ConnectionLost,
             Self::Cancelled => ErrorCode::Cancelled,
+            Self::PeerUnreachable => ErrorCode::PeerUnreachable,
             Self::Peer { code } => code.clone(),
         }
     }
@@ -153,7 +160,7 @@ impl From<io::Error> for Error {
 mod tests {
     use super::*;
 
-    const ALL_CODES: [ErrorCode; 7] = [
+    const ALL_CODES: [ErrorCode; 8] = [
         ErrorCode::Declined,
         ErrorCode::VersionMismatch { ours: 1, theirs: 2 },
         ErrorCode::InvalidFileName,
@@ -161,6 +168,7 @@ mod tests {
         ErrorCode::ProtocolViolation,
         ErrorCode::ConnectionLost,
         ErrorCode::Cancelled,
+        ErrorCode::PeerUnreachable,
     ];
 
     #[test]

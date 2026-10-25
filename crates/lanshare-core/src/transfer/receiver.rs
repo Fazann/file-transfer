@@ -7,7 +7,7 @@ use std::{
 };
 
 use tokio::{
-    fs::{self, File, OpenOptions},
+    fs::{File, OpenOptions},
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::watch,
 };
@@ -16,6 +16,7 @@ use tracing::{debug, info, warn};
 use super::{chunk_len, sanitize_file_name, Progress, BUFFER_SIZE};
 use crate::{
     error::{Error, ErrorCode, Result},
+    identity::DeviceId,
     protocol::{read_message, write_message, Message, PROTOCOL_VERSION},
 };
 
@@ -25,6 +26,8 @@ const MAX_NAME_ATTEMPTS: u32 = 10_000;
 /// An offer received from a sender, after its file name was sanitized.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncomingOffer {
+    /// Stable id of the sending device.
+    pub device_id: DeviceId,
     /// Name the sender reported for its device.
     pub device_name: String,
     /// Sanitized file name.
@@ -63,7 +66,7 @@ pub enum ReceiveOutcome {
 /// Handles one incoming transfer on `stream`, saving the file into `download_dir`.
 ///
 /// If `download_dir/<file_name>` exists, the file is saved as `name (1).ext`, `name (2).ext` and so on. If the
-/// transfer fails after the file was created, the partial file is deleted.
+/// transfer fails, or this future is dropped (cancelled) after the file was created, the partial file is deleted.
 ///
 /// # Errors
 ///
@@ -82,9 +85,9 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
     D: OfferDecider,
 {
-    let device_name = read_hello(stream).await?;
+    let (device_id, device_name) = read_hello(stream).await?;
     let (file_name, size) = read_offer(stream).await?;
-    let offer = IncomingOffer { device_name, file_name, size };
+    let offer = IncomingOffer { device_id, device_name, file_name, size };
 
     if !decider.decide(&offer).await {
         info!(file_name = %offer.file_name, "offer declined");
@@ -99,35 +102,71 @@ where
             return Err(error);
         }
     };
+    // From here on, any early return or cancellation deletes the file, until `keep()` is called.
+    let partial = PartialFile { path };
     write_message(stream, &Message::Accept).await?;
-    info!(path = %path.display(), size, "receiving");
+    info!(path = %partial.path.display(), size, "receiving");
     progress.send_replace(Progress { transferred: 0, total: size });
 
-    if let Err(error) = receive_body(stream, file, size, progress).await {
-        // Resume comes in phase 3; until then a partial file is useless, so remove it.
-        if let Err(remove_error) = fs::remove_file(&path).await {
-            warn!(path = %path.display(), %remove_error, "could not delete partial file");
-        }
-        return Err(error);
-    }
+    receive_body(stream, file, size, progress).await?;
+    let path = partial.keep();
     info!(path = %path.display(), size, "file received");
     Ok(ReceiveOutcome::Saved(ReceivedFile { path, offer }))
 }
 
-/// Reads `Hello` and checks the protocol version. Returns the sender's device name.
-async fn read_hello<S>(stream: &mut S) -> Result<String>
+/// Deletes the file at `path` when dropped, unless [`PartialFile::keep`] was called.
+///
+/// `Drop` runs when the value goes out of scope, on success, on `?` early returns and when the receiving future is
+/// cancelled, much like a `defer` in Go. Resume comes in phase 3; until then a partial file is useless.
+struct PartialFile {
+    path: PathBuf,
+}
+
+impl PartialFile {
+    /// Marks the file as complete and returns its path without deleting it.
+    fn keep(self) -> PathBuf {
+        // `ManuallyDrop` stops `drop` from running, and `take` moves the path out of it.
+        let mut this = std::mem::ManuallyDrop::new(self);
+        std::mem::take(&mut this.path)
+    }
+}
+
+impl Drop for PartialFile {
+    fn drop(&mut self) {
+        // `Drop` cannot be async, so this uses blocking `std::fs`. Deleting one file is quick.
+        if let Err(error) = std::fs::remove_file(&self.path) {
+            warn!(path = %self.path.display(), %error, "could not delete partial file");
+        }
+    }
+}
+
+/// Reads `Hello` and checks the protocol version. Returns the sender's device id and name.
+async fn read_hello<S>(stream: &mut S) -> Result<(DeviceId, String)>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    match read_message(stream).await? {
-        Message::Hello { device_name, protocol_version } if protocol_version == PROTOCOL_VERSION => Ok(device_name),
-        Message::Hello { protocol_version, .. } => {
-            let code = ErrorCode::VersionMismatch { ours: PROTOCOL_VERSION, theirs: protocol_version };
-            write_message(stream, &Message::Reject { code }).await?;
-            Err(Error::VersionMismatch { ours: PROTOCOL_VERSION, theirs: protocol_version })
+    let message = match read_message(stream).await {
+        // A `Hello` laid out by another version, which only the version field could be read from.
+        Err(Error::VersionMismatch { theirs, .. }) => return reject_version(stream, theirs).await,
+        other => other?,
+    };
+    match message {
+        Message::Hello { protocol_version, device_id, device_name } if protocol_version == PROTOCOL_VERSION => {
+            Ok((device_id, device_name))
         }
+        Message::Hello { protocol_version, .. } => reject_version(stream, protocol_version).await,
         other => Err(Error::protocol_violation(format!("expected Hello, got {other:?}"))),
     }
+}
+
+/// Tells the sender its version is not supported, then fails with [`Error::VersionMismatch`].
+async fn reject_version<S, T>(stream: &mut S, theirs: u16) -> Result<T>
+where
+    S: AsyncWrite + Unpin,
+{
+    let code = ErrorCode::VersionMismatch { ours: PROTOCOL_VERSION, theirs };
+    write_message(stream, &Message::Reject { code }).await?;
+    Err(Error::VersionMismatch { ours: PROTOCOL_VERSION, theirs })
 }
 
 /// Reads `Offer` and sanitizes the file name. Returns the safe name and the size.

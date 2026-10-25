@@ -1,9 +1,15 @@
 //! Everything the CLI shows to people: progress bars, prompts, status lines and English error text.
 
-use std::io::{self, BufRead, Write};
+use std::{
+    io::{self, BufRead, Write},
+    path::Path,
+    time::Duration,
+};
 
 use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
 use lanshare_core::{
+    discovery::Peer,
+    identity::Os,
     transfer::{IncomingOffer, Progress, ReceivedFile},
     Error, ErrorCode,
 };
@@ -62,13 +68,67 @@ pub fn ask_yes_no(question: &str) -> bool {
     matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
-/// Printed once the receiver is listening.
-pub fn print_listening(port: u16, dir: &std::path::Path) {
-    println!("Waiting for files on port {port}, saving to {}", dir.display());
+/// Printed once the receiver is listening and advertising itself.
+pub fn print_listening(device_name: &str, port: u16, dir: &Path) {
+    println!("Receiving as \"{device_name}\" on port {port}, saving to {}", dir.display());
+    println!("Press Ctrl+C to stop.");
+}
+
+/// Printed when the receiver stops.
+pub fn print_stopped() {
+    println!("Stopped.");
+}
+
+/// Printed while `lanshare devices` listens.
+pub fn print_searching(duration: Duration) {
+    println!("Looking for devices for {} seconds...", duration.as_secs());
+}
+
+/// Prints the result of `lanshare devices`.
+pub fn print_devices(peers: &[Peer]) {
+    if peers.is_empty() {
+        println!(
+            "No devices found. Make sure LanShare is receiving on the other device and both are on the same network."
+        );
+        return;
+    }
+    for peer in peers {
+        println!("{}", device_line(peer));
+    }
+}
+
+/// Printed before connecting to a device found by name.
+pub fn print_connecting(peer: &Peer) {
+    println!("Connecting to {}", device_line(peer));
+}
+
+/// One line describing a device: name, OS and addresses.
+fn device_line(peer: &Peer) -> String {
+    let addresses: Vec<String> = peer.connect_order().iter().map(ToString::to_string).collect();
+    format!("{}  ({})  {}", printable(&peer.name), os_name(peer.os), addresses.join(", "))
+}
+
+fn os_name(os: Os) -> &'static str {
+    match os {
+        Os::Windows => "Windows",
+        Os::MacOs => "macOS",
+        Os::Linux => "Linux",
+    }
+}
+
+/// Error text when no device has the given name.
+pub fn no_device_named(name: &str) -> String {
+    format!("No device named \"{name}\" was found. Run `lanshare devices` to see what is available.")
+}
+
+/// Error text when several devices share a name, listing each of them.
+pub fn ambiguous_device_name(name: &str, peers: &[Peer]) -> String {
+    let lines: Vec<String> = peers.iter().map(|peer| format!("  {}", device_line(peer))).collect();
+    format!("Several devices are named \"{name}\". Send to one of their IP addresses instead:\n{}", lines.join("\n"))
 }
 
 /// Printed after a file is sent.
-pub fn print_sent(file: &std::path::Path) {
+pub fn print_sent(file: &Path) {
     println!("Sent {}", file.display());
 }
 
@@ -105,6 +165,7 @@ pub fn error_text(code: &ErrorCode) -> String {
         ErrorCode::ProtocolViolation => "The other device sent unexpected data.".to_owned(),
         ErrorCode::ConnectionLost => "The connection was lost.".to_owned(),
         ErrorCode::Cancelled => "The transfer was cancelled.".to_owned(),
+        ErrorCode::PeerUnreachable => "Could not connect to the device on any of its addresses.".to_owned(),
     }
 }
 

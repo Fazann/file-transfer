@@ -12,10 +12,11 @@ use tracing::{debug, info, warn};
 use super::{chunk_len, sanitize_file_name, Progress, BUFFER_SIZE};
 use crate::{
     error::{Error, Result},
+    identity::DeviceInfo,
     protocol::{read_message, write_message, Message, PROTOCOL_VERSION},
 };
 
-/// Sends the file at `file_path` over `stream`, publishing progress on `progress`.
+/// Sends the file at `file_path` over `stream` as device `local`, publishing progress on `progress`.
 ///
 /// Flow: `Hello`, `Offer`, wait for `Accept`, stream the raw bytes, then `Done`. The file is streamed through a
 /// 1 MiB buffer and is never loaded into memory.
@@ -29,7 +30,7 @@ use crate::{
 pub async fn send_file<S>(
     stream: &mut S,
     file_path: &Path,
-    device_name: &str,
+    local: &DeviceInfo,
     progress: &watch::Sender<Progress>,
 ) -> Result<()>
 where
@@ -43,7 +44,8 @@ where
     }
     let size = metadata.len();
 
-    let hello = Message::Hello { device_name: device_name.to_owned(), protocol_version: PROTOCOL_VERSION };
+    let hello =
+        Message::Hello { protocol_version: PROTOCOL_VERSION, device_id: local.id, device_name: local.name.clone() };
     write_message(stream, &hello).await?;
     write_message(stream, &Message::Offer { file_name: file_name.clone(), size }).await?;
     wait_for_accept(stream).await?;

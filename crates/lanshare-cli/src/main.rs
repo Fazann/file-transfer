@@ -9,8 +9,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::args::Cli;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     // Logs go to stderr and default to warnings only, so they do not fight with the progress bar.
     // Set `RUST_LOG=debug` (or `RUST_LOG=lanshare_core=info`) for more detail.
     tracing_subscriber::fmt()
@@ -19,5 +18,10 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    commands::run(cli.command).await.map_err(output::user_facing_error)
+    // Built by hand instead of `#[tokio::main]` so shutdown can skip waiting for blocking tasks: a terminal prompt
+    // waiting on stdin cannot be interrupted and would otherwise keep the program alive after Ctrl+C.
+    let runtime = tokio::runtime::Runtime::new()?;
+    let result = runtime.block_on(commands::run(cli));
+    runtime.shutdown_background();
+    result.map_err(output::user_facing_error)
 }
