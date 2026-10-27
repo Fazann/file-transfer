@@ -1,30 +1,39 @@
-//! Integration tests: a real sender and receiver talking over localhost TCP, sometimes through a proxy that breaks
-//! the connection or corrupts a byte.
+//! Integration tests: a real sender and receiver on localhost, over both TCP and QUIC. Faults are injected by
+//! wrapping the sender's connection, which works for encrypted QUIC as well as plain TCP.
 
 // `allow-unwrap-in-tests` in clippy.toml only covers `#[test]` functions, not the shared helpers in this file.
 #![allow(clippy::unwrap_used)]
 
 use std::{
+    borrow::Cow,
     future::Future,
-    io::{Read, Write},
+    io::{self, Read, Write},
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    task::{Context, Poll},
+    time::{Duration, Instant},
 };
 
 use lanshare_core::{
     identity::{DeviceId, DeviceInfo, Os},
     protocol::{read_message, write_message, EntryResume, Message, OfferEntry, PROTOCOL_VERSION},
     transfer::{
-        progress_channel, receive_file, send_file, IncomingOffer, OfferDecider, ReceiveOutcome, ReceivedFile,
-        SendOptions, DEFAULT_CHUNK_SIZE,
+        progress_channel, receive_file, run_bench, send_file, IncomingOffer, OfferDecider, Progress, ReceiveOutcome,
+        ReceivedFile, SendOptions, TransferControl, DEFAULT_CHUNK_SIZE,
     },
-    transport, Error, ErrorCode,
+    transport::{self, AnyConnection, Connection, Listener, RecvHalf, SendHalf, TransportKind, TransportPreference},
+    Error, ErrorCode,
 };
 use tempfile::TempDir;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf},
+    net::TcpStream,
+    sync::watch,
     task::JoinHandle,
 };
 use uuid::Uuid;
@@ -33,6 +42,21 @@ use uuid::Uuid;
 const TEST_CHUNK_SIZE: u32 = 256 * 1024;
 
 const MIB: usize = 1024 * 1024;
+
+/// Generates one `#[tokio::test]` per transport for a scenario `async fn(TransportPreference)`.
+macro_rules! over_both_transports {
+    ($scenario:ident: $tcp:ident, $quic:ident) => {
+        #[tokio::test(flavor = "multi_thread")]
+        async fn $tcp() {
+            $scenario(TransportPreference::Tcp).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn $quic() {
+            $scenario(TransportPreference::Quic).await;
+        }
+    };
+}
 
 /// Accepts or declines every offer.
 struct FixedDecider(bool);
@@ -43,18 +67,19 @@ impl OfferDecider for FixedDecider {
     }
 }
 
-async fn local_listener() -> (TcpListener, SocketAddr) {
-    let listener = transport::listen(0).await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    (listener, SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
+async fn local_listener() -> (Arc<Listener>, SocketAddr) {
+    let listener = Listener::bind(0).await.unwrap();
+    assert!(listener.quic_enabled());
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, listener.port()));
+    (Arc::new(listener), addr)
 }
 
 /// Runs a receiver for one connection in the background.
-fn spawn_receiver(listener: TcpListener, dir: PathBuf, accept: bool) -> JoinHandle<Result<ReceiveOutcome, Error>> {
+fn spawn_receiver(listener: Arc<Listener>, dir: PathBuf, accept: bool) -> JoinHandle<Result<ReceiveOutcome, Error>> {
     tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
+        let connection = listener.accept().await.unwrap();
         let (progress, _watcher) = progress_channel();
-        receive_file(&mut stream, &dir, &FixedDecider(accept), &progress).await
+        receive_file(&connection, &dir, &FixedDecider(accept), &TransferControl::default(), &progress).await
     })
 }
 
@@ -68,18 +93,22 @@ struct ReceiverLog {
 }
 
 /// Accepts connections one at a time, like `lanshare receive`, until a file is saved.
-fn spawn_receiver_until_saved(listener: Arc<TcpListener>, dir: PathBuf) -> JoinHandle<ReceiverLog> {
+fn spawn_receiver_until_saved(
+    listener: Arc<Listener>,
+    dir: PathBuf,
+    control: TransferControl,
+) -> JoinHandle<ReceiverLog> {
     tokio::spawn(async move {
         let mut errors = Vec::new();
         let mut resumed = Vec::new();
         loop {
-            let (mut stream, _) = listener.accept().await.unwrap();
+            let connection = listener.accept().await.unwrap();
             let (progress, watcher) = progress_channel();
-            let result = receive_file(&mut stream, &dir, &FixedDecider(true), &progress).await;
+            let result = receive_file(&connection, &dir, &FixedDecider(true), &control, &progress).await;
             resumed.push(watcher.borrow().resumed);
             match result {
                 Ok(ReceiveOutcome::Saved(saved)) => return ReceiverLog { errors, resumed, saved },
-                Ok(ReceiveOutcome::Declined(_)) => panic!("the test decider accepts everything"),
+                Ok(other) => panic!("unexpected outcome {other:?}"),
                 Err(error) => errors.push(error.code()),
             }
         }
@@ -100,21 +129,24 @@ fn hello(device_name: &str, protocol_version: u16) -> Message {
     Message::Hello { protocol_version, device_id: DeviceId::new_random(), device_name: device_name.into() }
 }
 
-fn offer(name: &str, size: u64, chunk_size: u32) -> Message {
-    Message::Offer {
-        transfer_id: Uuid::new_v4(),
-        chunk_size,
-        entries: vec![OfferEntry { relative_path: name.into(), size }],
-    }
+fn offer(transfer_id: Uuid, name: &str, size: u64, chunk_size: u32) -> Message {
+    Message::Offer { transfer_id, chunk_size, entries: vec![OfferEntry { relative_path: name.into(), size }] }
 }
 
 fn options(cache: &TempDir, chunk_size: u32) -> SendOptions {
     SendOptions { chunk_size, ..SendOptions::new(cache.path().to_owned()) }
 }
 
-async fn send(addr: SocketAddr, file: &Path, options: &SendOptions) -> Result<(), Error> {
+/// Sends `file` with a fresh control handle and no faults.
+async fn send(
+    addr: SocketAddr,
+    preference: TransportPreference,
+    file: &Path,
+    options: &SendOptions,
+) -> Result<(), Error> {
     let (progress, _watcher) = progress_channel();
-    send_file(|| transport::connect(addr), file, &sender_info(), options, &progress).await
+    let control = TransferControl::default();
+    send_file(|| transport::connect(addr, preference), file, &sender_info(), options, &control, &progress).await
 }
 
 /// Writes `size` bytes of deterministic pseudo-random data, 1 MiB at a time.
@@ -166,103 +198,184 @@ fn file_names(dir: &Path) -> Vec<String> {
 }
 
 fn bit_is_set(bits: &[u8], index: u64) -> bool {
-    bits[(index / 8) as usize] & (1 << (index % 8)) != 0
+    bits[usize::try_from(index / 8).unwrap()] & (1 << (index % 8)) != 0
 }
 
 fn dirs() -> (TempDir, TempDir, TempDir) {
     (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap())
 }
 
-/// What the proxy does to the first connection. Later connections pass through untouched.
+/// Waits until `condition` holds for the watched value, failing the test after 20 seconds.
+async fn wait_until<T>(watcher: &mut watch::Receiver<T>, condition: impl FnMut(&T) -> bool) {
+    tokio::time::timeout(Duration::from_secs(20), watcher.wait_for(condition)).await.unwrap().unwrap();
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The fault-injecting connection: the test hook that breaks or corrupts a transfer.
+
+/// What to do to the first connection. Later connections pass through untouched.
 #[derive(Debug, Clone, Copy, Default)]
 struct Fault {
-    /// Close both sides after forwarding this many sender bytes.
+    /// Fail every data stream once this many chunk bytes were written in total, as if the network went away.
     cut_after: Option<u64>,
-    /// Flip every bit of the sender byte at this offset.
+    /// Flip every bit of the byte at this offset of the first data stream.
     corrupt_at: Option<u64>,
 }
 
-/// Frames the receiver sent back, one list per connection.
-type ReplyLog = Arc<Mutex<Vec<Vec<Message>>>>;
-
-/// Starts a proxy in front of `target`. This is the test hook that breaks or corrupts the connection.
-async fn spawn_proxy(target: SocketAddr, fault: Fault) -> (SocketAddr, ReplyLog) {
-    let (listener, addr) = local_listener().await;
-    let log = ReplyLog::default();
-    let task_log = Arc::clone(&log);
-    tokio::spawn(async move {
-        let mut fault = Some(fault);
-        while let Ok((client, _)) = listener.accept().await {
-            let index = {
-                let mut log = task_log.lock().unwrap();
-                log.push(Vec::new());
-                log.len() - 1
-            };
-            let connection_fault = fault.take().unwrap_or_default();
-            tokio::spawn(proxy_connection(client, target, connection_fault, Arc::clone(&task_log), index));
-        }
-    });
-    (addr, log)
+/// Wraps a real connection: injects `fault` into the sender's data streams and records every byte the receiver
+/// sends back on the control channel.
+struct FaultyConnection {
+    inner: AnyConnection,
+    fault: Fault,
+    streams_opened: AtomicUsize,
+    data_written: Arc<AtomicU64>,
+    corrupted: Arc<AtomicBool>,
+    replies: Arc<Mutex<Vec<u8>>>,
 }
 
-async fn proxy_connection(client: TcpStream, target: SocketAddr, fault: Fault, log: ReplyLog, index: usize) {
-    let server = TcpStream::connect(target).await.unwrap();
-    let (mut client_read, mut client_write) = client.into_split();
-    let (mut server_read, mut server_write) = server.into_split();
-
-    // Returns `true` if it cut the connection, `false` when the sender closed it.
-    let forward = async {
-        let mut buffer = vec![0u8; 64 * 1024];
-        let mut position = 0u64;
-        loop {
-            let read = match client_read.read(&mut buffer).await {
-                Ok(0) | Err(_) => return false,
-                Ok(read) => read,
-            };
-            let end = position + read as u64;
-            if let Some(at) = fault.corrupt_at.filter(|at| (position..end).contains(at)) {
-                buffer[usize::try_from(at - position).unwrap()] ^= 0xff;
-            }
-            if let Some(cut) = fault.cut_after.filter(|cut| *cut <= end) {
-                let _ = server_write.write_all(&buffer[..usize::try_from(cut - position).unwrap()]).await;
-                return true;
-            }
-            if server_write.write_all(&buffer[..read]).await.is_err() {
-                return false;
-            }
-            position = end;
-        }
-    };
-    let backward = async {
-        while let Ok(message) = read_message(&mut server_read).await {
-            log.lock().unwrap()[index].push(message.clone());
-            if write_message(&mut client_write, &message).await.is_err() {
-                break;
-            }
-        }
-    };
-    // `pin!` lets both futures be polled by `select!` and then awaited again afterwards.
-    tokio::pin!(forward, backward);
-    tokio::select! {
-        cut = &mut forward => {
-            if !cut {
-                (&mut backward).await;
-            }
-        }
-        () = &mut backward => {}
+impl Connection for FaultyConnection {
+    async fn open_control(&self) -> lanshare_core::Result<(SendHalf, RecvHalf)> {
+        let (send, recv) = self.inner.open_control().await?;
+        Ok((send, Box::new(RecordingReader { inner: recv, log: Arc::clone(&self.replies) })))
     }
-    // Returning drops all four halves, which closes both connections.
+
+    async fn open_data(&self, transfer_id: Uuid) -> lanshare_core::Result<SendHalf> {
+        let stream = self.inner.open_data(transfer_id).await?;
+        Ok(Box::new(FaultyWriter {
+            inner: stream,
+            fault: self.fault,
+            is_first: self.streams_opened.fetch_add(1, Ordering::SeqCst) == 0,
+            written: 0,
+            total: Arc::clone(&self.data_written),
+            corrupted: Arc::clone(&self.corrupted),
+        }))
+    }
+
+    async fn accept_data(&self, transfer_id: Uuid) -> lanshare_core::Result<RecvHalf> {
+        self.inner.accept_data(transfer_id).await
+    }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn sends_100_mib_file_over_localhost() {
+struct FaultyWriter {
+    inner: SendHalf,
+    fault: Fault,
+    is_first: bool,
+    written: u64,
+    total: Arc<AtomicU64>,
+    corrupted: Arc<AtomicBool>,
+}
+
+impl AsyncWrite for FaultyWriter {
+    fn poll_write(mut self: Pin<&mut Self>, context: &mut Context<'_>, buffer: &[u8]) -> Poll<io::Result<usize>> {
+        let this = &mut *self;
+        if this.fault.cut_after.is_some_and(|cut| this.total.load(Ordering::SeqCst) >= cut) {
+            return Poll::Ready(Err(io::Error::from(io::ErrorKind::BrokenPipe)));
+        }
+        let start = this.written;
+        let flip = this
+            .fault
+            .corrupt_at
+            .filter(|_| this.is_first && !this.corrupted.load(Ordering::SeqCst))
+            .filter(|at| (start..start + buffer.len() as u64).contains(at))
+            .map(|at| usize::try_from(at - start).unwrap());
+        let mut data = Cow::Borrowed(buffer);
+        if let Some(position) = flip {
+            data.to_mut()[position] ^= 0xff;
+        }
+        let result = Pin::new(&mut this.inner).poll_write(context, &data);
+        if let Poll::Ready(Ok(written)) = result {
+            if flip.is_some_and(|position| position < written) {
+                this.corrupted.store(true, Ordering::SeqCst);
+            }
+            this.written += written as u64;
+            this.total.fetch_add(written as u64, Ordering::SeqCst);
+        }
+        result
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(context)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(context)
+    }
+}
+
+struct RecordingReader {
+    inner: RecvHalf,
+    log: Arc<Mutex<Vec<u8>>>,
+}
+
+impl AsyncRead for RecordingReader {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let before = buffer.filled().len();
+        let result = Pin::new(&mut self.inner).poll_read(context, buffer);
+        if let Poll::Ready(Ok(())) = result {
+            self.log.lock().unwrap().extend_from_slice(&buffer.filled()[before..]);
+        }
+        result
+    }
+}
+
+/// The receiver's control bytes, one buffer per connection attempt.
+type ReplyLogs = Arc<Mutex<Vec<Arc<Mutex<Vec<u8>>>>>>;
+
+/// Sends `file` through a [`FaultyConnection`]: the first attempt gets `fault`, reconnects are clean.
+async fn send_with_fault(
+    addr: SocketAddr,
+    preference: TransportPreference,
+    file: &Path,
+    options: &SendOptions,
+    fault: Fault,
+) -> (Result<(), Error>, ReplyLogs) {
+    let logs = ReplyLogs::default();
+    let attempts = AtomicUsize::new(0);
+    let connect = || async {
+        let inner = transport::connect(addr, preference).await?;
+        let replies = Arc::new(Mutex::new(Vec::new()));
+        logs.lock().unwrap().push(Arc::clone(&replies));
+        let first = attempts.fetch_add(1, Ordering::SeqCst) == 0;
+        Ok(FaultyConnection {
+            inner,
+            fault: if first { fault } else { Fault::default() },
+            streams_opened: AtomicUsize::new(0),
+            data_written: Arc::default(),
+            corrupted: Arc::default(),
+            replies,
+        })
+    };
+    let (progress, _watcher) = progress_channel();
+    let result = send_file(connect, file, &sender_info(), options, &TransferControl::default(), &progress).await;
+    (result, logs)
+}
+
+/// Decodes the recorded control bytes of one connection attempt.
+async fn replies(logs: &ReplyLogs, attempt: usize) -> Vec<Message> {
+    let bytes = logs.lock().unwrap()[attempt].lock().unwrap().clone();
+    let mut reader = bytes.as_slice();
+    let mut messages = Vec::new();
+    while let Ok(message) = read_message(&mut reader).await {
+        messages.push(message);
+    }
+    messages
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Scenarios that run over both transports.
+
+async fn sends_file(preference: TransportPreference) {
     let (source_dir, download_dir, cache_dir) = dirs();
     let source = source_dir.path().join("big.bin");
-    write_test_file(&source, 100 * MIB);
+    write_test_file(&source, 40 * MIB);
 
     let (listener, addr) = local_listener().await;
     let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
-    send(addr, &source, &options(&cache_dir, DEFAULT_CHUNK_SIZE)).await.unwrap();
+    send(addr, preference, &source, &options(&cache_dir, DEFAULT_CHUNK_SIZE)).await.unwrap();
 
     let ReceiveOutcome::Saved(saved) = receiver.await.unwrap().unwrap() else {
         panic!("expected the file to be saved");
@@ -273,51 +386,51 @@ async fn sends_100_mib_file_over_localhost() {
     assert_eq!(file_names(download_dir.path()), ["big.bin"], "part and state files are gone");
     assert_eq!(file_names(cache_dir.path()), Vec::<String>::new(), "hash cache entry is deleted after success");
 }
+over_both_transports!(sends_file: sends_file_over_tcp, sends_file_over_quic);
 
-#[tokio::test]
-async fn empty_file_is_sent() {
+async fn sends_empty_file(preference: TransportPreference) {
     let (source_dir, download_dir, cache_dir) = dirs();
     let source = source_dir.path().join("empty.txt");
     std::fs::write(&source, b"").unwrap();
 
     let (listener, addr) = local_listener().await;
     let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
-    send(addr, &source, &options(&cache_dir, TEST_CHUNK_SIZE)).await.unwrap();
+    send(addr, preference, &source, &options(&cache_dir, TEST_CHUNK_SIZE)).await.unwrap();
 
     let ReceiveOutcome::Saved(saved) = receiver.await.unwrap().unwrap() else {
         panic!("expected the file to be saved");
     };
     assert_eq!(std::fs::read(&saved.path).unwrap(), b"");
 }
+over_both_transports!(sends_empty_file: sends_empty_file_over_tcp, sends_empty_file_over_quic);
 
-#[tokio::test(flavor = "multi_thread")]
-async fn dropped_connection_resumes_with_only_missing_chunks() {
+async fn dropped_connection_resumes_with_only_missing_chunks(preference: TransportPreference) {
     let (source_dir, download_dir, cache_dir) = dirs();
     let source = source_dir.path().join("resume.bin");
     let size = 8 * MIB;
     write_test_file(&source, size);
     let chunk_count = (size / TEST_CHUNK_SIZE as usize) as u64;
 
-    let (listener, receiver_addr) = local_listener().await;
-    let receiver = spawn_receiver_until_saved(Arc::new(listener), download_dir.path().to_owned());
+    let (listener, addr) = local_listener().await;
+    let receiver = spawn_receiver_until_saved(listener, download_dir.path().to_owned(), TransferControl::default());
     let fault = Fault { cut_after: Some(size as u64 / 2), ..Fault::default() };
-    let (proxy_addr, log) = spawn_proxy(receiver_addr, fault).await;
-    send(proxy_addr, &source, &options(&cache_dir, TEST_CHUNK_SIZE)).await.unwrap();
+    let (result, logs) = send_with_fault(addr, preference, &source, &options(&cache_dir, TEST_CHUNK_SIZE), fault).await;
+    result.unwrap();
 
     let receiver = receiver.await.unwrap();
     assert_eq!(receiver.errors, [ErrorCode::ConnectionLost]);
     assert_same_contents(&source, &receiver.saved.path);
     assert_eq!(file_names(download_dir.path()), ["resume.bin"]);
 
-    let log = log.lock().unwrap();
-    assert_eq!(log.len(), 2, "one reconnect");
-    let Message::Accept { resume } = &log[1][0] else {
-        panic!("expected Accept, got {:?}", log[1][0]);
+    assert_eq!(logs.lock().unwrap().len(), 2, "one reconnect");
+    let second = replies(&logs, 1).await;
+    let Message::Accept { resume } = &second[0] else {
+        panic!("expected Accept, got {:?}", second[0]);
     };
     let [EntryResume { entry: 0, have }] = resume.as_slice() else {
         panic!("expected one resume entry, got {resume:?}");
     };
-    let resent: Vec<u64> = log[1]
+    let resent: Vec<u64> = second
         .iter()
         .filter_map(|message| match message {
             Message::ChunkAck { index, .. } => Some(*index),
@@ -331,61 +444,255 @@ async fn dropped_connection_resumes_with_only_missing_chunks() {
     }
     assert_eq!(receiver.resumed[1], already_had as u64 * u64::from(TEST_CHUNK_SIZE));
 }
+over_both_transports!(
+    dropped_connection_resumes_with_only_missing_chunks: drop_and_resume_over_tcp, drop_and_resume_over_quic
+);
 
-#[tokio::test(flavor = "multi_thread")]
-async fn corrupted_chunk_is_nacked_and_resent() {
+async fn corrupted_chunk_is_nacked_and_resent(preference: TransportPreference) {
     let (source_dir, download_dir, cache_dir) = dirs();
     let source = source_dir.path().join("corrupt.bin");
     write_test_file(&source, 2 * MIB);
 
-    let (listener, receiver_addr) = local_listener().await;
-    let receiver = spawn_receiver_until_saved(Arc::new(listener), download_dir.path().to_owned());
-    // Past the hello, offer and first chunk header (well under 1 KiB), inside chunk 0's data.
+    let (listener, addr) = local_listener().await;
+    let receiver = spawn_receiver_until_saved(listener, download_dir.path().to_owned(), TransferControl::default());
+    // Past the first chunk header (under 100 bytes), inside the first chunk's data.
     let fault = Fault { corrupt_at: Some(100_000), ..Fault::default() };
-    let (proxy_addr, log) = spawn_proxy(receiver_addr, fault).await;
-    send(proxy_addr, &source, &options(&cache_dir, TEST_CHUNK_SIZE)).await.unwrap();
+    let (result, logs) = send_with_fault(addr, preference, &source, &options(&cache_dir, TEST_CHUNK_SIZE), fault).await;
+    result.unwrap();
 
     let receiver = receiver.await.unwrap();
     assert_eq!(receiver.errors, []);
     assert_same_contents(&source, &receiver.saved.path);
 
-    let log = log.lock().unwrap();
-    assert_eq!(log.len(), 1, "no reconnect needed");
-    let nack = log[0].iter().position(|message| *message == Message::ChunkNack { entry: 0, index: 0 });
-    let ack = log[0].iter().position(|message| *message == Message::ChunkAck { entry: 0, index: 0 });
-    assert!(nack.is_some() && ack > nack, "expected ChunkNack then ChunkAck for chunk 0, got {:?}", log[0]);
+    assert_eq!(logs.lock().unwrap().len(), 1, "no reconnect needed");
+    let messages = replies(&logs, 0).await;
+    let nack = messages.iter().position(|message| matches!(message, Message::ChunkNack { entry: 0, .. }));
+    let Some(Message::ChunkNack { index, .. }) = nack.map(|position| &messages[position]) else {
+        panic!("expected a ChunkNack, got {messages:?}");
+    };
+    let ack = messages.iter().position(|message| *message == Message::ChunkAck { entry: 0, index: *index });
+    assert!(ack > nack, "expected ChunkAck for chunk {index} after its ChunkNack");
 }
+over_both_transports!(corrupted_chunk_is_nacked_and_resent: corruption_over_tcp, corruption_over_quic);
 
-#[tokio::test(flavor = "multi_thread")]
-async fn restarted_receiver_resumes() {
+async fn restarted_receiver_resumes(preference: TransportPreference) {
     let (source_dir, download_dir, cache_dir) = dirs();
     let source = source_dir.path().join("restart.bin");
     write_test_file(&source, 16 * MIB);
     let (listener, addr) = local_listener().await;
-    let listener = Arc::new(listener);
 
     // The first receiver is stopped halfway, as if the program was closed.
     let (progress, mut watcher) = progress_channel();
     let first_listener = Arc::clone(&listener);
     let first_dir = download_dir.path().to_owned();
     let first = tokio::spawn(async move {
-        let (mut stream, _) = first_listener.accept().await.unwrap();
-        receive_file(&mut stream, &first_dir, &FixedDecider(true), &progress).await
+        let connection = first_listener.accept().await.unwrap();
+        receive_file(&connection, &first_dir, &FixedDecider(true), &TransferControl::default(), &progress).await
     });
     let source_path = source.clone();
-    let options = options(&cache_dir, TEST_CHUNK_SIZE);
-    let sender = tokio::spawn(async move { send(addr, &source_path, &options).await });
+    // A bandwidth limit keeps the transfer slow enough to stop it in the middle.
+    let sender = tokio::spawn(async move {
+        let (progress, _watcher) = progress_channel();
+        let control = TransferControl::new(20);
+        let options = options(&cache_dir, TEST_CHUNK_SIZE);
+        let connect = || transport::connect(addr, preference);
+        send_file(connect, &source_path, &sender_info(), &options, &control, &progress).await
+    });
 
-    watcher.wait_for(|progress| progress.total > 0 && progress.transferred >= progress.total / 2).await.unwrap();
+    wait_until(&mut watcher, |progress: &Progress| progress.total > 0 && progress.transferred >= progress.total / 2)
+        .await;
     first.abort();
     assert!(first.await.unwrap_err().is_cancelled());
     assert!(download_dir.path().join("restart.bin.lanshare-state").exists(), "state saved when stopped");
 
-    let second = spawn_receiver_until_saved(listener, download_dir.path().to_owned());
+    let second = spawn_receiver_until_saved(listener, download_dir.path().to_owned(), TransferControl::default());
     sender.await.unwrap().unwrap();
     let second = second.await.unwrap();
     assert!(second.resumed.last().copied().unwrap() > 0, "second receiver resumed");
     assert_same_contents(&source, &second.saved.path);
+}
+over_both_transports!(restarted_receiver_resumes: restart_over_tcp, restart_over_quic);
+
+async fn pause_and_resume_from_either_side(preference: TransportPreference) {
+    let (source_dir, download_dir, cache_dir) = dirs();
+    let source = source_dir.path().join("pause.bin");
+    write_test_file(&source, 24 * MIB);
+    let (listener, addr) = local_listener().await;
+    let receiver_control = TransferControl::default();
+    let receiver = spawn_receiver_until_saved(listener, download_dir.path().to_owned(), receiver_control.clone());
+
+    // Limited to 10 MB/s so the transfer lasts long enough to pause twice.
+    let sender_control = TransferControl::new(10);
+    let (progress, mut watcher) = progress_channel();
+    let sender = {
+        let (control, source) = (sender_control.clone(), source.clone());
+        let options = options(&cache_dir, TEST_CHUNK_SIZE);
+        tokio::spawn(async move {
+            let connect = || transport::connect(addr, preference);
+            send_file(connect, &source, &sender_info(), &options, &control, &progress).await
+        })
+    };
+
+    // The sender pauses; the receiver hears about it; nothing moves; the receiver resumes.
+    wait_until(&mut watcher, |progress: &Progress| progress.total > 0 && progress.transferred >= progress.total / 4)
+        .await;
+    sender_control.pause();
+    wait_until(&mut receiver_control.subscribe(), |paused| *paused).await;
+    assert_stalled(&watcher).await;
+    receiver_control.resume();
+    wait_until(&mut sender_control.subscribe(), |paused| !*paused).await;
+
+    // The receiver pauses; the sender stops; the sender resumes.
+    wait_until(&mut watcher, |progress: &Progress| progress.transferred >= progress.total / 2).await;
+    receiver_control.pause();
+    wait_until(&mut sender_control.subscribe(), |paused| *paused).await;
+    assert_stalled(&watcher).await;
+    sender_control.resume();
+
+    sender.await.unwrap().unwrap();
+    let receiver = receiver.await.unwrap();
+    assert_eq!(receiver.errors, []);
+    assert!(!receiver_control.is_paused());
+    assert_same_contents(&source, &receiver.saved.path);
+}
+over_both_transports!(pause_and_resume_from_either_side: pause_over_tcp, pause_over_quic);
+
+/// Lets chunks already in flight finish, then checks that no more are acknowledged for a while.
+async fn assert_stalled(watcher: &watch::Receiver<Progress>) {
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let before = watcher.borrow().transferred;
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert_eq!(watcher.borrow().transferred, before, "no chunks may be sent while paused");
+}
+
+async fn bandwidth_limit_holds(preference: TransportPreference) {
+    let (source_dir, download_dir, cache_dir) = dirs();
+    let source = source_dir.path().join("limited.bin");
+    write_test_file(&source, 30_000_000);
+    let (listener, addr) = local_listener().await;
+    let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
+
+    let control = TransferControl::new(10);
+    let (progress, _watcher) = progress_channel();
+    let start = Instant::now();
+    let options = options(&cache_dir, DEFAULT_CHUNK_SIZE);
+    let connect = || transport::connect(addr, preference);
+    send_file(connect, &source, &sender_info(), &options, &control, &progress).await.unwrap();
+    let elapsed = start.elapsed().as_secs_f64();
+
+    assert!(matches!(receiver.await.unwrap().unwrap(), ReceiveOutcome::Saved(_)));
+    // 30 MB at 10 MB/s is 3 seconds; allow ±10%.
+    assert!((2.7..=3.3).contains(&elapsed), "30 MB at 10 MB/s took {elapsed:.2} s");
+}
+over_both_transports!(bandwidth_limit_holds: limit_over_tcp, limit_over_quic);
+
+async fn benchmark_round_trip(preference: TransportPreference) {
+    let (_source_dir, download_dir, _cache_dir) = dirs();
+    let (listener, addr) = local_listener().await;
+    let receiver = spawn_receiver(listener, download_dir.path().to_owned(), false);
+
+    let connection = transport::connect(addr, preference).await.unwrap();
+    let result = run_bench(&connection, &sender_info(), 50_000_000, 4).await.unwrap();
+    assert_eq!(result.bytes, 50_000_000);
+    assert!(result.megabytes_per_second() > 0.0);
+
+    let ReceiveOutcome::Benchmark { device_name, bytes } = receiver.await.unwrap().unwrap() else {
+        panic!("expected a benchmark");
+    };
+    assert_eq!((device_name.as_str(), bytes), ("test-sender", 50_000_000));
+    assert_eq!(file_names(download_dir.path()), Vec::<String>::new(), "benchmarks never touch the disk");
+}
+over_both_transports!(benchmark_round_trip: bench_over_tcp, bench_over_quic);
+
+async fn existing_file_gets_numbered_name(preference: TransportPreference) {
+    let (source_dir, download_dir, cache_dir) = dirs();
+    let source = source_dir.path().join("note.txt");
+    std::fs::write(&source, b"new contents").unwrap();
+    std::fs::write(download_dir.path().join("note.txt"), b"old contents").unwrap();
+
+    let (listener, addr) = local_listener().await;
+    let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
+    send(addr, preference, &source, &options(&cache_dir, TEST_CHUNK_SIZE)).await.unwrap();
+
+    let ReceiveOutcome::Saved(saved) = receiver.await.unwrap().unwrap() else {
+        panic!("expected the file to be saved");
+    };
+    assert_eq!(saved.path, download_dir.path().join("note (1).txt"));
+    assert_eq!(std::fs::read(&saved.path).unwrap(), b"new contents");
+    assert_eq!(std::fs::read(download_dir.path().join("note.txt")).unwrap(), b"old contents");
+}
+over_both_transports!(existing_file_gets_numbered_name: numbered_name_over_tcp, numbered_name_over_quic);
+
+async fn rejected_offer_ends_sender_with_declined(preference: TransportPreference) {
+    let (source_dir, download_dir, cache_dir) = dirs();
+    let source = source_dir.path().join("unwanted.txt");
+    std::fs::write(&source, b"no thanks").unwrap();
+
+    let (listener, addr) = local_listener().await;
+    let receiver = spawn_receiver(listener, download_dir.path().to_owned(), false);
+    let error = send(addr, preference, &source, &options(&cache_dir, TEST_CHUNK_SIZE)).await.unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::Declined);
+    assert!(matches!(receiver.await.unwrap().unwrap(), ReceiveOutcome::Declined(_)));
+    assert_eq!(file_names(download_dir.path()), Vec::<String>::new());
+}
+over_both_transports!(rejected_offer_ends_sender_with_declined: declined_over_tcp, declined_over_quic);
+
+// ---------------------------------------------------------------------------------------------------------------
+// Transport selection.
+
+#[tokio::test]
+async fn auto_prefers_quic() {
+    let (_listener, addr) = local_listener().await;
+    let connection = transport::connect(addr, TransportPreference::Auto).await.unwrap();
+    assert_eq!(connection.kind(), TransportKind::Quic);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn falls_back_to_tcp_when_udp_is_blocked() {
+    // A UDP socket that never answers holds the port, so QUIC packets vanish like behind a firewall.
+    let black_hole = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+    let port = black_hole.local_addr().unwrap().port();
+    let listener = Arc::new(Listener::bind(port).await.unwrap());
+    assert!(!listener.quic_enabled(), "the UDP port is taken, so the listener runs TCP only");
+
+    let (source_dir, download_dir, cache_dir) = dirs();
+    let source = source_dir.path().join("fallback.txt");
+    std::fs::write(&source, b"over TCP").unwrap();
+    let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
+
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let start = Instant::now();
+    let connection = transport::connect(addr, TransportPreference::Auto).await.unwrap();
+    assert_eq!(connection.kind(), TransportKind::Tcp);
+    assert!(start.elapsed() >= transport::QUIC_CONNECT_TIMEOUT, "QUIC was tried first");
+
+    let (progress, _watcher) = progress_channel();
+    let options = options(&cache_dir, TEST_CHUNK_SIZE);
+    let mut connection = Some(connection);
+    let connect = || std::future::ready(connection.take().ok_or(Error::ConnectionLost));
+    send_file(connect, &source, &sender_info(), &options, &TransferControl::default(), &progress).await.unwrap();
+    let ReceiveOutcome::Saved(saved) = receiver.await.unwrap().unwrap() else {
+        panic!("expected the file to be saved");
+    };
+    assert_eq!(std::fs::read(saved.path).unwrap(), b"over TCP");
+}
+
+#[tokio::test]
+async fn nothing_listening_is_transport_unavailable() {
+    // Bind and drop a listener to find a port with nothing on it.
+    let port = Listener::bind(0).await.unwrap().port();
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let error = transport::connect(addr, TransportPreference::Auto).await.unwrap_err();
+    assert_eq!(error.code(), ErrorCode::TransportUnavailable);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Protocol checks with hand-written messages over a raw TCP control connection.
+
+/// Opens a raw TCP control connection to the listener.
+async fn raw_control(addr: SocketAddr) -> TcpStream {
+    TcpStream::connect(addr).await.unwrap()
 }
 
 #[tokio::test]
@@ -396,9 +703,9 @@ async fn offer_larger_than_free_space_is_rejected() {
 
     // 16 TiB: more than any test machine has free, and still within the chunk count limit.
     let size = 1u64 << 44;
-    let mut stream = transport::connect(addr).await.unwrap();
+    let mut stream = raw_control(addr).await;
     write_message(&mut stream, &hello("huge", PROTOCOL_VERSION)).await.unwrap();
-    write_message(&mut stream, &offer("huge.bin", size, DEFAULT_CHUNK_SIZE)).await.unwrap();
+    write_message(&mut stream, &offer(Uuid::new_v4(), "huge.bin", size, DEFAULT_CHUNK_SIZE)).await.unwrap();
 
     let Message::Reject { code: ErrorCode::InsufficientSpace { needed, available } } =
         read_message(&mut stream).await.unwrap()
@@ -413,47 +720,13 @@ async fn offer_larger_than_free_space_is_rejected() {
 }
 
 #[tokio::test]
-async fn existing_file_gets_numbered_name() {
-    let (source_dir, download_dir, cache_dir) = dirs();
-    let source = source_dir.path().join("note.txt");
-    std::fs::write(&source, b"new contents").unwrap();
-    std::fs::write(download_dir.path().join("note.txt"), b"old contents").unwrap();
-
-    let (listener, addr) = local_listener().await;
-    let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
-    send(addr, &source, &options(&cache_dir, TEST_CHUNK_SIZE)).await.unwrap();
-
-    let ReceiveOutcome::Saved(saved) = receiver.await.unwrap().unwrap() else {
-        panic!("expected the file to be saved");
-    };
-    assert_eq!(saved.path, download_dir.path().join("note (1).txt"));
-    assert_eq!(std::fs::read(&saved.path).unwrap(), b"new contents");
-    assert_eq!(std::fs::read(download_dir.path().join("note.txt")).unwrap(), b"old contents");
-}
-
-#[tokio::test]
-async fn rejected_offer_ends_sender_with_declined() {
-    let (source_dir, download_dir, cache_dir) = dirs();
-    let source = source_dir.path().join("unwanted.txt");
-    std::fs::write(&source, b"no thanks").unwrap();
-
-    let (listener, addr) = local_listener().await;
-    let receiver = spawn_receiver(listener, download_dir.path().to_owned(), false);
-    let error = send(addr, &source, &options(&cache_dir, TEST_CHUNK_SIZE)).await.unwrap_err();
-
-    assert_eq!(error.code(), ErrorCode::Declined);
-    assert!(matches!(receiver.await.unwrap().unwrap(), ReceiveOutcome::Declined(_)));
-    assert_eq!(file_names(download_dir.path()), Vec::<String>::new());
-}
-
-#[tokio::test]
 async fn version_mismatch_is_rejected() {
     let (_source_dir, download_dir, _cache_dir) = dirs();
     let (listener, addr) = local_listener().await;
     let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
 
     let future_version = PROTOCOL_VERSION + 1;
-    let mut stream = transport::connect(addr).await.unwrap();
+    let mut stream = raw_control(addr).await;
     write_message(&mut stream, &hello("future", future_version)).await.unwrap();
 
     let expected = ErrorCode::VersionMismatch { ours: PROTOCOL_VERSION, theirs: future_version };
@@ -468,7 +741,7 @@ async fn hello_with_unknown_layout_is_rejected_as_version_mismatch() {
     let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
 
     // A `Hello` from a future version whose fields after `protocol_version` this version cannot decode.
-    let mut stream = transport::connect(addr).await.unwrap();
+    let mut stream = raw_control(addr).await;
     stream.write_all(&[0, 0, 0, 4, 0, 99, 0xff, 0xff]).await.unwrap();
 
     let expected = ErrorCode::VersionMismatch { ours: PROTOCOL_VERSION, theirs: 99 };
@@ -482,9 +755,9 @@ async fn unsafe_file_name_is_rejected() {
     let (listener, addr) = local_listener().await;
     let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
 
-    let mut stream = transport::connect(addr).await.unwrap();
+    let mut stream = raw_control(addr).await;
     write_message(&mut stream, &hello("attacker", PROTOCOL_VERSION)).await.unwrap();
-    write_message(&mut stream, &offer("../..", 1, TEST_CHUNK_SIZE)).await.unwrap();
+    write_message(&mut stream, &offer(Uuid::new_v4(), "../..", 1, TEST_CHUNK_SIZE)).await.unwrap();
 
     let reply = read_message(&mut stream).await.unwrap();
     assert_eq!(reply, Message::Reject { code: ErrorCode::InvalidFileName });
@@ -497,7 +770,7 @@ async fn offer_with_several_entries_is_rejected() {
     let (listener, addr) = local_listener().await;
     let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
 
-    let mut stream = transport::connect(addr).await.unwrap();
+    let mut stream = raw_control(addr).await;
     write_message(&mut stream, &hello("folder", PROTOCOL_VERSION)).await.unwrap();
     let entries = vec![
         OfferEntry { relative_path: "a.txt".into(), size: 1 },
@@ -515,39 +788,49 @@ async fn offer_with_several_entries_is_rejected() {
 async fn dropped_connection_keeps_part_and_state_for_resume() {
     let (_source_dir, download_dir, _cache_dir) = dirs();
     let (listener, addr) = local_listener().await;
-    let listener = Arc::new(listener);
-    let same_offer = offer("partial.bin", 10, 4);
+    let transfer_id = Uuid::new_v4();
+    let same_offer = offer(transfer_id, "partial.bin", 10, 4);
 
-    // First connection: send chunk 0 of 3, then vanish.
-    let receiver = {
-        let listener = Arc::clone(&listener);
-        let dir = download_dir.path().to_owned();
-        tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let (progress, _watcher) = progress_channel();
-            receive_file(&mut stream, &dir, &FixedDecider(true), &progress).await
-        })
-    };
-    let mut stream = transport::connect(addr).await.unwrap();
-    write_message(&mut stream, &hello("flaky", PROTOCOL_VERSION)).await.unwrap();
-    write_message(&mut stream, &same_offer).await.unwrap();
-    assert_eq!(read_message(&mut stream).await.unwrap(), Message::Accept { resume: vec![] });
+    // First connection: send chunk 0 of 3 on a data connection, then vanish.
+    let receiver = spawn_receiver(Arc::clone(&listener), download_dir.path().to_owned(), true);
+    let mut control = raw_control(addr).await;
+    write_message(&mut control, &hello("flaky", PROTOCOL_VERSION)).await.unwrap();
+    write_message(&mut control, &same_offer).await.unwrap();
+    assert_eq!(read_message(&mut control).await.unwrap(), Message::Accept { resume: vec![] });
+    let mut data = TcpStream::connect(addr).await.unwrap();
+    write_message(&mut data, &Message::DataStreamHello { transfer_id }).await.unwrap();
     let hash = *blake3::hash(b"abcd").as_bytes();
-    write_message(&mut stream, &Message::ChunkHeader { entry: 0, index: 0, len: 4, hash }).await.unwrap();
-    stream.write_all(b"abcd").await.unwrap();
-    assert_eq!(read_message(&mut stream).await.unwrap(), Message::ChunkAck { entry: 0, index: 0 });
-    drop(stream);
+    write_message(&mut data, &Message::ChunkHeader { entry: 0, index: 0, len: 4, hash }).await.unwrap();
+    data.write_all(b"abcd").await.unwrap();
+    assert_eq!(read_message(&mut control).await.unwrap(), Message::ChunkAck { entry: 0, index: 0 });
+    drop((control, data));
 
     assert_eq!(receiver.await.unwrap().unwrap_err().code(), ErrorCode::ConnectionLost);
     assert_eq!(file_names(download_dir.path()), ["partial.bin.lanshare-part", "partial.bin.lanshare-state"]);
 
     // Second connection with the same offer: the receiver reports chunk 0 as already received.
-    let receiver = spawn_receiver(Arc::into_inner(listener).unwrap(), download_dir.path().to_owned(), false);
-    let mut stream = transport::connect(addr).await.unwrap();
-    write_message(&mut stream, &hello("flaky", PROTOCOL_VERSION)).await.unwrap();
-    write_message(&mut stream, &same_offer).await.unwrap();
+    let receiver = spawn_receiver(listener, download_dir.path().to_owned(), false);
+    let mut control = raw_control(addr).await;
+    write_message(&mut control, &hello("flaky", PROTOCOL_VERSION)).await.unwrap();
+    write_message(&mut control, &same_offer).await.unwrap();
     let expected = Message::Accept { resume: vec![EntryResume { entry: 0, have: vec![0b001] }] };
-    assert_eq!(read_message(&mut stream).await.unwrap(), expected, "resumes without asking the decider again");
-    drop(stream);
+    assert_eq!(read_message(&mut control).await.unwrap(), expected, "resumes without asking the decider again");
+    drop(control);
     assert_eq!(receiver.await.unwrap().unwrap_err().code(), ErrorCode::ConnectionLost);
+}
+
+#[tokio::test]
+async fn chunk_data_on_the_control_channel_is_a_violation() {
+    let (_source_dir, download_dir, _cache_dir) = dirs();
+    let (listener, addr) = local_listener().await;
+    let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
+
+    let mut control = raw_control(addr).await;
+    write_message(&mut control, &hello("old", PROTOCOL_VERSION)).await.unwrap();
+    write_message(&mut control, &offer(Uuid::new_v4(), "x.bin", 4, 4)).await.unwrap();
+    assert_eq!(read_message(&mut control).await.unwrap(), Message::Accept { resume: vec![] });
+    let hash = *blake3::hash(b"abcd").as_bytes();
+    write_message(&mut control, &Message::ChunkHeader { entry: 0, index: 0, len: 4, hash }).await.unwrap();
+
+    assert_eq!(receiver.await.unwrap().unwrap_err().code(), ErrorCode::ProtocolViolation);
 }

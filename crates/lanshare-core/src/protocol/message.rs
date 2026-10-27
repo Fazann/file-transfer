@@ -38,7 +38,8 @@ pub enum Message {
         /// Human-readable name of the sending device.
         device_name: String,
     },
-    /// The sender offers files. Exactly one entry until phase 7.
+    /// The sender offers files. Exactly one entry until phase 7. Sent on the control stream, like every message
+    /// except the chunk data.
     Offer {
         /// Stays the same when the same file is offered again, so the receiver can resume.
         transfer_id: Uuid,
@@ -57,7 +58,7 @@ pub enum Message {
         /// Why the receiver refused.
         code: ErrorCode,
     },
-    /// One chunk of file data follows this frame as exactly `len` raw, unframed bytes.
+    /// One chunk of file data follows this frame as exactly `len` raw, unframed bytes. Sent on data streams only.
     ChunkHeader {
         /// Index of the entry in the offer.
         entry: u32,
@@ -97,5 +98,21 @@ pub enum Message {
         code: ErrorCode,
         /// Extra detail for logs only, never shown in the UI.
         detail: Option<String>,
+    },
+    /// First frame of every extra TCP connection, marking it as a data stream of this transfer. Not used over QUIC.
+    DataStreamHello {
+        /// The `transfer_id` from the offer.
+        transfer_id: Uuid,
+    },
+    /// Either side asks to pause: the sender stops starting new chunks; chunks already on their way finish.
+    Pause,
+    /// Either side asks to continue after `Pause`.
+    Resume,
+    /// Sent instead of `Offer` to measure throughput: `size` bytes of generated data that the receiver discards.
+    BenchOffer {
+        /// Random id of this benchmark, used like a `transfer_id` for `DataStreamHello`.
+        transfer_id: Uuid,
+        /// Bytes the sender will send.
+        size: u64,
     },
 }

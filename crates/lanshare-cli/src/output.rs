@@ -6,11 +6,12 @@ use std::{
     time::Duration,
 };
 
-use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
+use indicatif::{DecimalBytes, HumanBytes, ProgressBar, ProgressStyle};
 use lanshare_core::{
     discovery::Peer,
     identity::Os,
-    transfer::{IncomingOffer, Progress, ReceivedFile},
+    transfer::{BenchResult, IncomingOffer, Progress, ReceivedFile},
+    transport::TransportKind,
     Error, ErrorCode,
 };
 use tokio::{sync::watch, task::JoinHandle};
@@ -85,6 +86,11 @@ pub fn print_listening(device_name: &str, port: u16, dir: &Path) {
     println!("Press Ctrl+C to stop.");
 }
 
+/// Printed when the UDP port could not be opened, so only TCP works.
+pub fn print_quic_unavailable(port: u16) {
+    eprintln!("QUIC is unavailable (UDP port {port} could not be opened); accepting TCP connections only.");
+}
+
 /// Printed when the receiver stops.
 pub fn print_stopped() {
     println!("Stopped.");
@@ -138,6 +144,40 @@ pub fn ambiguous_device_name(name: &str, peers: &[Peer]) -> String {
     format!("Several devices are named \"{name}\". Send to one of their IP addresses instead:\n{}", lines.join("\n"))
 }
 
+/// Printed once a connection is up, for example `Connected over QUIC`.
+pub fn print_transport(kind: TransportKind) {
+    println!("Connected over {}", transport_name(kind));
+}
+
+fn transport_name(kind: TransportKind) -> &'static str {
+    match kind {
+        TransportKind::Tcp => "TCP",
+        TransportKind::Quic => "QUIC",
+    }
+}
+
+/// Printed before a benchmark starts.
+pub fn print_bench_start(size: u64, kind: TransportKind, streams: u8) {
+    println!("Sending {} over {} with {streams} streams...", DecimalBytes(size), transport_name(kind));
+}
+
+/// The benchmark result, in MB/s (1 MB = 1,000,000 bytes).
+pub fn print_bench_result(result: &BenchResult, kind: TransportKind) {
+    println!(
+        "{}: {} in {:.2} s, {:.1} MB/s ({} streams)",
+        transport_name(kind),
+        DecimalBytes(result.bytes),
+        result.elapsed.as_secs_f64(),
+        result.megabytes_per_second(),
+        result.streams
+    );
+}
+
+/// Printed by the receiver after a benchmark.
+pub fn print_bench_received(device_name: &str, bytes: u64) {
+    println!("Benchmark from {}: {} received and discarded", printable(device_name), DecimalBytes(bytes));
+}
+
 /// Printed after a file is sent.
 pub fn print_sent(file: &Path) {
     println!("Sent {}", file.display());
@@ -188,6 +228,11 @@ pub fn error_text(code: &ErrorCode) -> String {
             HumanBytes(*needed),
             HumanBytes(*available)
         ),
+        ErrorCode::TransportUnavailable => {
+            "Could not connect over QUIC or TCP. Check that LanShare is receiving on the other device and that a \
+             firewall is not blocking port 52000."
+                .to_owned()
+        }
     }
 }
 

@@ -11,15 +11,21 @@ license = "MIT OR Apache-2.0"
 lanshare-core = { path = "crates/lanshare-core" }
 
 anyhow = "1"
+async-channel = "2"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
+criterion = "0.8"
 directories = "6"
 fs2 = "0.4"
+governor = "0.10"
 hostname = "0.4"
 if-addrs = "0.15"
 indicatif = "0.18"
 mdns-sd = "0.21"
 postcard = { version = "1", features = ["alloc"] }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 socket2 = { version = "0.6", features = ["all"] }
@@ -43,4 +49,14 @@ expect_used = "deny"
 
 # BLAKE3 is far slower without optimizations, which makes debug builds and tests crawl on large files.
 [profile.dev.package.blake3]
+opt-level = 3
+
+# The same for QUIC and its crypto: unoptimized, they cap test transfers at a few MB/s.
+[profile.dev.package.quinn-proto]
+opt-level = 3
+
+[profile.dev.package.rustls]
+opt-level = 3
+
+[profile.dev.package.ring]
 opt-level = 3

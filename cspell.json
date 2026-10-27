@@ -1,0 +1,30 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "words": [
+    "acked",
+    "acks",
+    "ALPN",
+    "BBR",
+    "blake",
+    "Deque",
+    "fdatasync",
+    "FULLFSYNC",
+    "lanshare",
+    "mdns",
+    "nack",
+    "nacked",
+    "nacks",
+    "postcard",
+    "quic",
+    "quinn",
+    "rcgen",
+    "Resends",
+    "rfind",
+    "rustls",
+    "subsec",
+    "uni",
+    "xorshift"
+  ],
+  "ignorePaths": ["target", "Cargo.lock"]
+}

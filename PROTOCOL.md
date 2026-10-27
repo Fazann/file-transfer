@@ -1,11 +1,36 @@
 # LanShare Protocol
 
-Current version: **3** (`PROTOCOL_VERSION` in `crates/lanshare-core/src/protocol/mod.rs`).
+Current version: **4** (`PROTOCOL_VERSION` in `crates/lanshare-core/src/protocol/mod.rs`).
 
-Transfers run over plain TCP on port `52000`. One connection carries one offer. The connecting side is the
-**sender**; the listening side is the **receiver**. Files travel in fixed-size chunks, each with its own BLAKE3 hash,
-so a dropped transfer can resume and every byte is verified. Devices find each other with mDNS and a UDP broadcast
-fallback, described under [Discovery](#discovery).
+Transfers run over QUIC on UDP port `52000`, or over TCP on port `52000` when QUIC cannot connect (see
+[Transports](#transports)). One connection carries one offer. The connecting side is the **sender**; the listening
+side is the **receiver**. Files travel in fixed-size chunks, each with its own BLAKE3 hash, over several parallel data
+streams, so a dropped transfer can resume and every byte is verified. Devices find each other with mDNS and a UDP
+broadcast fallback, described under [Discovery](#discovery).
+
+## Transports
+
+Every connection has one **control channel** (both directions) and any number of one-way **data streams** from the
+sender to the receiver. Every message except chunk data travels on the control channel, as frames. Data streams carry
+only `ChunkHeader` frames, each followed by its chunk's raw bytes, repeated until the sender closes the stream.
+
+| | QUIC (preferred) | TCP (fallback) |
+|---|---|---|
+| Port | UDP `52000` | TCP `52000` |
+| Control channel | the first bidirectional stream, opened by the sender | the first TCP connection |
+| Data stream | a unidirectional stream from the sender | one more TCP connection, starting with `DataStreamHello` |
+| Encryption | TLS 1.3, ALPN `lanshare` (certificates are not checked yet; phase 5) | none yet (phase 5) |
+| Dead peer noticed by | QUIC keep-alive every 5 s, idle timeout 20 s | TCP keep-alive after 5 s idle, every 2 s |
+
+- The sender tries QUIC first. If the QUIC handshake does not finish within **3 seconds**, it connects over TCP
+  instead. If neither works, it fails with `TRANSPORT_UNAVAILABLE` (or `PEER_UNREACHABLE` after trying every address
+  of a discovered device).
+- The receiver listens on both. If the UDP port cannot be opened, it accepts TCP only.
+- TCP: the receiver reads the first frame of every new TCP connection. `DataStreamHello` attaches the connection to
+  the transfer with that `transfer_id`; anything else (normally `Hello`) starts a new control channel.
+- QUIC settings: stream receive window 32 MiB, connection window 64 MiB, BBR congestion control.
+- The sender opens `streams` data streams (`config.toml`, default 4, 1 to 16), but never more than there are chunks
+  to send. The receiver accepts at most 16 per connection.
 
 ## Frame format
 
@@ -45,6 +70,12 @@ Chunk data is **not** framed: each `ChunkHeader` frame is followed by exactly `l
 | 7 | `EntryDone` | `entry: u32`, `root_hash: [u8; 32]` | sender | Every chunk of the entry was acknowledged |
 | 8 | `Done` | none | both | Sender: everything was sent. Receiver's answer: every entry is verified and saved |
 | 9 | `Error` | `code: ErrorCode`, `detail: Option<String>` | either | Reports a failure; the connection ends |
+| 10 | `DataStreamHello` | `transfer_id: Uuid` | sender | First frame of an extra TCP data connection |
+| 11 | `Pause` | none | either | Stop starting new chunks; chunks on their way finish |
+| 12 | `Resume` | none | either | Continue after `Pause` |
+| 13 | `BenchOffer` | `transfer_id: Uuid`, `size: u64` | sender | Sent instead of `Offer` by `lanshare bench` |
+
+`ChunkHeader` is only valid on data streams; every other message only on the control channel.
 
 Structs, with fields in wire order:
 
@@ -81,6 +112,7 @@ at the end.
 | 7 | `PeerUnreachable` | `PEER_UNREACHABLE` | none (local only: no address of a discovered peer answered) |
 | 8 | `HashMismatch` | `HASH_MISMATCH` | none (a chunk failed 3 times, or the root hash did not match) |
 | 9 | `InsufficientSpace` | `INSUFFICIENT_SPACE` | `needed: u64`, `available: u64` (bytes) |
+| 10 | `TransportUnavailable` | `TRANSPORT_UNAVAILABLE` | none (local only: neither QUIC nor TCP connected) |
 
 ## Chunks and hashes
 
@@ -100,6 +132,8 @@ at the end.
 
 ## Flow
 
+Control channel on the left of each arrow, data streams marked `[data]`:
+
 ```
 Sender                                         Receiver
   |                                               |
@@ -112,11 +146,14 @@ Sender                                         Receiver
   |                                               |  cannot create the part file?   -> Reject { IO }
   |<-------------- Accept { resume: [have...] } --|  `resume` lists chunks already received
   |                                               |
-  |---- ChunkHeader { 0, i, len, hash } --------->|
-  |==== len raw bytes ===========================>|  hash matches?
+  |  opens N data streams                         |
+  |---- [data] ChunkHeader { 0, i, len, hash } -->|
+  |==== [data] len raw bytes ====================>|  hash matches?
   |<------------------------ ChunkAck { 0, i } ---|    yes: written to disk
   |<----------------------- ChunkNack { 0, i } ---|    no: sender sends chunk i again
-  |          ... every chunk not in `have` ...    |
+  |   ... every chunk not in `have`, spread over the data streams ...
+  |                                               |
+  |<---------- Pause / Resume (either side) ----->|
   |                                               |
   |---- EntryDone { 0, root_hash } -------------->|  root hash of stored chunk hashes matches?
   |---- Done ------------------------------------>|    no: Error { HASH_MISMATCH }, close
@@ -125,8 +162,34 @@ Sender                                         Receiver
  close                                          close
 ```
 
-The sender may send up to 8 chunks before it has an answer for the first; acks and nacks come back in the order the
-receiver finishes the chunks. The sender sends `EntryDone` only after every chunk is acknowledged.
+Missing chunks wait in one queue; each data stream takes the next chunk when it is free, so faster streams carry
+more. Each stream may have up to 4 chunks without an answer. Acks and nacks come back on the control channel in the
+order the receiver finishes the chunks; a nacked chunk goes back into the queue. The sender sends `EntryDone` only
+after every chunk is acknowledged, and closes its data streams once nothing is left to send.
+
+After its final message (`Done`, `Reject` or `Error`), the receiver closes its side of the control channel and waits
+up to 5 seconds for the sender to close, so the message is not lost when the connection goes away.
+
+### Pause and resume
+
+- Either device may send `Pause` or `Resume` on the control channel at any time during the data phase. The transfer
+  is paused while the last message from either side was `Pause`.
+- A paused sender starts no new chunks; chunks already being sent finish and are acknowledged as usual.
+- A device sends `Pause` or `Resume` only when its own state changes, so a received `Pause` is never echoed back.
+- A transfer paused when the connection drops stays paused after the sender reconnects; the sender repeats `Pause`.
+
+### Bandwidth limit
+
+The sender can limit its sending rate to a number of MB/s (1 MB = 1,000,000 bytes), shared by all data streams of a
+transfer and changeable while it runs (`bandwidth_limit_mbps` in `config.toml`, `0` = unlimited). It is local to the
+sender and not part of the wire format.
+
+### Benchmarks
+
+`BenchOffer { transfer_id, size }` replaces `Offer`. The receiver answers `Accept { resume: [] }` without asking the
+user. The sender then sends `size` bytes of generated data as `ChunkHeader` frames (chunks of 8 MiB, `hash` all
+zeros) on its data streams, and the receiver discards them without hashing or writing anything. Once all bytes have
+arrived the receiver sends `Done`. `transfer_id` is a fresh random UUID, used only to route TCP data connections.
 
 ### Receiver rules
 
@@ -151,7 +214,10 @@ receiver finishes the chunks. The sender sends `EntryDone` only after every chun
   are kept and the receiver sends `Error { HASH_MISMATCH }`.
 - If the connection drops, the part and state files are kept. On start, the receiver deletes part and state files
   not modified for `stale_part_days` (default 7).
-- If no data arrives for 20 seconds during a transfer, the connection counts as lost.
+- If no data arrives for 20 seconds during a transfer, and the transfer is not paused, the connection counts as
+  lost.
+- `DataStreamHello` connections for a `transfer_id` nobody claims are closed once 64 transfers or 16 connections per
+  transfer are waiting.
 
 ### Sender rules
 
@@ -161,9 +227,10 @@ receiver finishes the chunks. The sender sends `EntryDone` only after every chun
   is not in the cache is read and hashed locally. Cache entries are deleted when the transfer completes or after 7
   days.
 - A `ChunkNack` makes the sender send that chunk again.
-- If the connection drops (or no data moves for 20 seconds), the sender reconnects after 1 s, 2 s, 5 s, 10 s, then
-  every 10 s, for up to 2 minutes, and sends the same `Hello` and `Offer`. A connection that delivered at least one
-  chunk starts a new 2-minute window when it drops. If no reconnect succeeds, it fails with `CONNECTION_LOST`.
+- If the connection drops (or no data moves for 20 seconds while not paused), the sender reconnects after 1 s, 2 s,
+  5 s, 10 s, then every 10 s, for up to 2 minutes, and sends the same `Hello` and `Offer`. A connection that delivered
+  at least one chunk starts a new 2-minute window when it drops. If no reconnect succeeds, it fails with
+  `CONNECTION_LOST`.
 - If the local file shrinks while sending, the sender stops with `IO`.
 - A `Reject` or `Error` from the receiver ends the transfer with that code.
 - When connecting to a discovered peer, the sender tries its addresses in this order: private IPv4, other IPv4, then
@@ -230,6 +297,13 @@ The peer's address is the datagram's source address. Datagrams without the magic
 ignored.
 
 ## Changelog
+
+### v4
+
+- QUIC (UDP 52000) is the preferred transport, with TCP as the fallback. A connection now has a control channel and
+  parallel data streams; `ChunkHeader` frames and chunk bytes travel only on data streams.
+- New messages `DataStreamHello` (10), `Pause` (11), `Resume` (12) and `BenchOffer` (13).
+- New error code `TRANSPORT_UNAVAILABLE` (10).
 
 ### v3
 

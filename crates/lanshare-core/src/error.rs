@@ -47,6 +47,8 @@ pub enum ErrorCode {
         /// Bytes free on the receiving volume.
         available: u64,
     },
+    /// Neither QUIC nor TCP could connect to the address.
+    TransportUnavailable,
 }
 
 impl ErrorCode {
@@ -66,6 +68,7 @@ impl ErrorCode {
             Self::PeerUnreachable => "PEER_UNREACHABLE",
             Self::HashMismatch => "HASH_MISMATCH",
             Self::InsufficientSpace { .. } => "INSUFFICIENT_SPACE",
+            Self::TransportUnavailable => "TRANSPORT_UNAVAILABLE",
         }
     }
 }
@@ -119,6 +122,9 @@ pub enum Error {
         /// Bytes free on the receiving volume.
         available: u64,
     },
+    /// Neither QUIC nor TCP could connect to the address.
+    #[error("TRANSPORT_UNAVAILABLE")]
+    TransportUnavailable,
     /// The peer reported an error that has no more specific local variant.
     #[error("PEER: {}", code.name())]
     Peer {
@@ -144,6 +150,7 @@ impl Error {
             Self::InsufficientSpace { needed, available } => {
                 ErrorCode::InsufficientSpace { needed: *needed, available: *available }
             }
+            Self::TransportUnavailable => ErrorCode::TransportUnavailable,
             Self::Peer { code } => code.clone(),
         }
     }
@@ -175,7 +182,8 @@ impl From<io::Error> for Error {
             io::ErrorKind::UnexpectedEof
             | io::ErrorKind::ConnectionReset
             | io::ErrorKind::ConnectionAborted
-            | io::ErrorKind::BrokenPipe => {
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::NotConnected => {
                 tracing::debug!(%error, "treating io error as a lost connection");
                 Self::ConnectionLost
             }
@@ -188,7 +196,7 @@ impl From<io::Error> for Error {
 mod tests {
     use super::*;
 
-    const ALL_CODES: [ErrorCode; 10] = [
+    const ALL_CODES: [ErrorCode; 11] = [
         ErrorCode::Declined,
         ErrorCode::VersionMismatch { ours: 1, theirs: 2 },
         ErrorCode::InvalidFileName,
@@ -199,6 +207,7 @@ mod tests {
         ErrorCode::PeerUnreachable,
         ErrorCode::HashMismatch,
         ErrorCode::InsufficientSpace { needed: 2, available: 1 },
+        ErrorCode::TransportUnavailable,
     ];
 
     #[test]

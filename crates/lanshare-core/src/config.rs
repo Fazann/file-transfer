@@ -14,6 +14,7 @@ use crate::{
     identity::{DeviceId, DeviceInfo, Os},
     paths,
     protocol::PROTOCOL_VERSION,
+    transfer::{DEFAULT_STREAMS, MAX_STREAMS},
     transport::DEFAULT_PORT,
 };
 
@@ -24,7 +25,16 @@ pub const CONFIG_FILE_NAME: &str = "config.toml";
 const MAX_DEVICE_NAME_BYTES: usize = 200;
 
 /// Keys every saved config contains. If one is missing, the file is rewritten with the default filled in.
-const KEYS: [&str; 6] = ["device_id", "device_name", "port", "download_dir", "udp_fallback", "stale_part_days"];
+const KEYS: [&str; 8] = [
+    "device_id",
+    "device_name",
+    "port",
+    "download_dir",
+    "udp_fallback",
+    "stale_part_days",
+    "streams",
+    "bandwidth_limit_mbps",
+];
 
 /// Settings stored in `config.toml`.
 ///
@@ -46,6 +56,10 @@ pub struct Config {
     /// Unfinished transfers (`.lanshare-part` and `.lanshare-state` files) untouched for this many days are deleted
     /// when the receiver starts.
     pub stale_part_days: u32,
+    /// Parallel data streams per outgoing transfer, 1 to 16. Values outside that range are clamped when loading.
+    pub streams: usize,
+    /// Bandwidth limit for outgoing transfers in MB/s (1 MB = 1,000,000 bytes). `0` means unlimited.
+    pub bandwidth_limit_mbps: u32,
 }
 
 impl Default for Config {
@@ -57,6 +71,8 @@ impl Default for Config {
             download_dir: default_download_dir(),
             udp_fallback: true,
             stale_part_days: 7,
+            streams: DEFAULT_STREAMS,
+            bandwidth_limit_mbps: 0,
         }
     }
 }
@@ -93,6 +109,7 @@ impl Config {
             Err(error) => return Err(Error::Io(error)),
         };
         config.device_name = clean_device_name(&config.device_name);
+        config.streams = config.streams.clamp(1, MAX_STREAMS);
         if needs_save {
             config.save_at(path)?;
         }
@@ -187,6 +204,8 @@ mod tests {
         assert_eq!(created.port, DEFAULT_PORT);
         assert!(created.udp_fallback);
         assert_eq!(created.stale_part_days, 7);
+        assert_eq!(created.streams, 4);
+        assert_eq!(created.bandwidth_limit_mbps, 0);
         assert!(created.download_dir.ends_with("LanShare"));
         assert_eq!(Config::load_or_create_at(&path).unwrap(), created, "second load must keep the same id");
     }
@@ -211,6 +230,16 @@ mod tests {
         fs::write(&path, &edited).unwrap();
         Config::load_or_create_at(&path).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), edited);
+    }
+
+    #[test]
+    fn stream_count_is_clamped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        fs::write(&path, "streams = 99\n").unwrap();
+        assert_eq!(Config::load_or_create_at(&path).unwrap().streams, MAX_STREAMS);
+        fs::write(&path, "streams = 0\n").unwrap();
+        assert_eq!(Config::load_or_create_at(&path).unwrap().streams, 1);
     }
 
     #[test]

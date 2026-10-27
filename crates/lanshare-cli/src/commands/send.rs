@@ -8,13 +8,10 @@ use lanshare_core::{
     config::Config,
     discovery::{Discovery, DiscoveryOptions, Peer, PeerEvent},
     paths,
-    transfer::{progress_channel, send_file, SendOptions},
-    transport::{self, PEER_ADDRESS_TIMEOUT},
+    transfer::{progress_channel, send_file, SendOptions, TransferControl},
+    transport::{self, AnyConnection, TransportPreference},
 };
-use tokio::{
-    net::TcpStream,
-    time::{timeout_at, Duration, Instant},
-};
+use tokio::time::{timeout_at, Duration, Instant};
 
 use super::discovery_options;
 use crate::{args::SendArgs, output};
@@ -28,14 +25,21 @@ const DUPLICATE_GRACE: Duration = Duration::from_secs(2);
 /// Finds the receiver and sends the file with a progress bar.
 pub async fn run(args: SendArgs, config: &Config, use_mdns: bool) -> anyhow::Result<()> {
     let local = config.device_info();
-    let destination = resolve(&args, config, use_mdns).await?;
+    let destination = Destination::resolve(&args.target, args.port, args.transport.into(), config, use_mdns).await?;
     // `paths` creates the directory with blocking `std::fs`, so it runs on the blocking pool.
-    let options = SendOptions::new(tokio::task::spawn_blocking(paths::hash_cache_dir).await??);
+    let mut options = SendOptions::new(tokio::task::spawn_blocking(paths::hash_cache_dir).await??);
+    options.streams = args.streams.map_or(config.streams, usize::from);
+    let control = TransferControl::new(args.limit.unwrap_or(config.bandwidth_limit_mbps));
 
     let (progress, watcher) = progress_channel();
     let bar = output::spawn_progress_bar(watcher);
     // The closure is called again for every reconnect, always trying the same addresses.
-    let result = send_file(|| destination.connect(), &args.file, &local, &options, &progress).await;
+    let connect = || async {
+        let connection = destination.connect().await?;
+        output::print_transport(connection.kind());
+        Ok(connection)
+    };
+    let result = send_file(connect, &args.file, &local, &options, &control, &progress).await;
     // Dropping the sender tells the progress bar task to finish.
     drop(progress);
     bar.await?;
@@ -46,28 +50,35 @@ pub async fn run(args: SendArgs, config: &Config, use_mdns: bool) -> anyhow::Res
 }
 
 /// Where to connect: one address typed by the user, or the addresses of a discovered device.
-enum Destination {
-    Address(SocketAddr),
-    Peer(Vec<SocketAddr>),
+pub(super) struct Destination {
+    addrs: Vec<SocketAddr>,
+    is_typed_address: bool,
+    preference: TransportPreference,
 }
 
 impl Destination {
-    async fn connect(&self) -> lanshare_core::Result<TcpStream> {
-        match self {
-            Self::Address(addr) => transport::connect(*addr).await,
-            Self::Peer(addrs) => transport::connect_any(addrs, PEER_ADDRESS_TIMEOUT).await,
+    /// An IP address is used directly; anything else is looked up as a device name.
+    pub(super) async fn resolve(
+        target: &str,
+        port: u16,
+        preference: TransportPreference,
+        config: &Config,
+        use_mdns: bool,
+    ) -> anyhow::Result<Self> {
+        if let Ok(ip) = target.parse::<IpAddr>() {
+            return Ok(Self { addrs: vec![SocketAddr::new(ip, port)], is_typed_address: true, preference });
+        }
+        let peer = find_by_name(target, config, discovery_options(config, false, use_mdns)).await?;
+        output::print_connecting(&peer);
+        Ok(Self { addrs: peer.socket_addrs(), is_typed_address: false, preference })
+    }
+
+    pub(super) async fn connect(&self) -> lanshare_core::Result<AnyConnection> {
+        match self.addrs.as_slice() {
+            [addr] if self.is_typed_address => transport::connect(*addr, self.preference).await,
+            addrs => transport::connect_any(addrs, self.preference).await,
         }
     }
-}
-
-/// An IP address is used directly; anything else is looked up as a device name.
-async fn resolve(args: &SendArgs, config: &Config, use_mdns: bool) -> anyhow::Result<Destination> {
-    if let Ok(ip) = args.target.parse::<IpAddr>() {
-        return Ok(Destination::Address(SocketAddr::new(ip, args.port)));
-    }
-    let peer = find_by_name(&args.target, config, discovery_options(config, false, use_mdns)).await?;
-    output::print_connecting(&peer);
-    Ok(Destination::Peer(peer.socket_addrs()))
 }
 
 /// Looks for exactly one device whose name matches `name`, ignoring case.

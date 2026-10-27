@@ -6,13 +6,18 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+async-channel = { workspace = true }
 blake3 = { workspace = true }
 directories = { workspace = true }
 fs2 = { workspace = true }
+governor = { workspace = true }
 hostname = { workspace = true }
 if-addrs = { workspace = true }
 mdns-sd = { workspace = true }
 postcard = { workspace = true }
+quinn = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 socket2 = { workspace = true }
@@ -23,9 +28,14 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 tempfile = { workspace = true }
 # `test-util` lets tests pause the clock, so timeouts fire instantly.
 tokio = { workspace = true, features = ["test-util"] }
+
+[[bench]]
+name = "hashing"
+harness = false
 
 [lints]
 workspace = true

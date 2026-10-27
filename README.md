@@ -2,8 +2,9 @@
 
 Transfer large files between computers on the same local network or Wi-Fi.
 
-> Status: phase 3. One file at a time over plain TCP from the command line, with automatic device discovery, chunk
-> hashing and resume. There is **no encryption yet**, so only use it on networks you trust.
+> Status: phase 4. One file at a time from the command line over QUIC (TCP fallback) with parallel streams,
+> automatic device discovery, chunk hashing, resume, pause and a bandwidth limit. QUIC is encrypted but certificates
+> are **not checked yet**, and the TCP fallback is not encrypted, so only use it on networks you trust.
 
 ## Build
 
@@ -31,10 +32,21 @@ On the sending computer:
 lanshare devices                     # lists devices running `lanshare receive` (listens for 5 seconds)
 lanshare send "Office PC" ./movie.mkv
 lanshare send 192.168.1.20 ./movie.mkv --port 52000
+lanshare send "Office PC" ./movie.mkv --streams 8 --limit 10   # 8 parallel streams, at most 10 MB/s
+lanshare send "Office PC" ./movie.mkv --transport tcp          # skip QUIC
 ```
 
 `send` looks the name up on the network, ignoring upper/lower case. If several devices share the name, it lists them
 and asks you to use an IP address instead.
+
+`send` connects over QUIC and falls back to TCP if QUIC does not connect within 3 seconds (for example when a
+firewall blocks UDP). It prints which one it used.
+
+To measure throughput without touching either disk (see [`BENCHMARKS.md`](BENCHMARKS.md)):
+
+```sh
+lanshare bench "Office PC" --size 2GB --streams 4 --transport quic
+```
 
 ### Interrupted transfers
 
@@ -63,16 +75,19 @@ The first run creates `config.toml`, shared by the CLI and (later) the desktop a
 |---|---|---|
 | `device_id` | random, generated once | Identifies this device. Do not copy it to another machine. |
 | `device_name` | the computer's host name | Name other devices see |
-| `port` | `52000` | TCP port for `receive` |
+| `port` | `52000` | Port for `receive`, used for both TCP and UDP (QUIC) |
 | `download_dir` | `Downloads/LanShare` | Where received files go |
 | `udp_fallback` | `true` | Also discover over UDP broadcast, for networks that block mDNS |
 | `stale_part_days` | `7` | Delete unfinished transfers older than this many days when `receive` starts |
+| `streams` | `4` | Parallel data streams per outgoing transfer, 1 to 16 |
+| `bandwidth_limit_mbps` | `0` | Outgoing limit in MB/s (1 MB = 1,000,000 bytes); `0` means unlimited |
 
 ### Firewall
 
 Allow these on the receiving computer:
 
-- TCP `52000`: transfers
+- UDP `52000`: transfers over QUIC
+- TCP `52000`: transfers over TCP, when QUIC is blocked
 - UDP `5353`: mDNS discovery
 - UDP `52001`: broadcast discovery fallback
 

@@ -5,10 +5,12 @@ use std::path::Path;
 use lanshare_core::{
     config::Config,
     discovery::Discovery,
-    transfer::{cleanup_stale_parts, progress_channel, receive_file, IncomingOffer, OfferDecider, ReceiveOutcome},
-    transport,
+    transfer::{
+        cleanup_stale_parts, progress_channel, receive_file, IncomingOffer, OfferDecider, ReceiveOutcome,
+        TransferControl,
+    },
+    transport::Listener,
 };
-use tokio::net::TcpListener;
 
 use super::discovery_options;
 use crate::{args::ReceiveArgs, output};
@@ -39,10 +41,13 @@ pub async fn run(args: ReceiveArgs, config: &Config, use_mdns: bool) -> anyhow::
     if let Err(error) = cleanup_stale_parts(&dir, config.stale_part_age()).await {
         tracing::warn!(%error, "could not clean up old unfinished transfers");
     }
-    let listener = transport::listen(args.port.unwrap_or(config.port)).await?;
+    let listener = Listener::bind(args.port.unwrap_or(config.port)).await?;
+    if !listener.quic_enabled() {
+        output::print_quic_unavailable(listener.port());
+    }
 
     let mut info = config.device_info();
-    info.port = listener.local_addr()?.port();
+    info.port = listener.port();
     let (discovery, _events) = Discovery::start(&info, discovery_options(config, true, use_mdns))?;
     output::print_listening(&info.name, info.port, &dir);
 
@@ -67,19 +72,22 @@ pub async fn run(args: ReceiveArgs, config: &Config, use_mdns: bool) -> anyhow::
 }
 
 /// Accepts one connection and handles its transfer.
-async fn receive_one(listener: &TcpListener, dir: &Path, decider: &PromptDecider) -> anyhow::Result<()> {
-    let (mut stream, peer_addr) = listener.accept().await?;
-    tracing::info!(%peer_addr, "incoming connection");
+async fn receive_one(listener: &Listener, dir: &Path, decider: &PromptDecider) -> anyhow::Result<()> {
+    let connection = listener.accept().await?;
+    tracing::info!(peer = %connection.remote_addr(), transport = ?connection.kind(), "incoming connection");
 
     let (progress, watcher) = progress_channel();
     let bar = output::spawn_progress_bar(watcher);
-    let result = receive_file(&mut stream, dir, decider, &progress).await;
+    // The CLI has no pause key; the handle still lets the sender's pauses be tracked.
+    let control = TransferControl::default();
+    let result = receive_file(&connection, dir, decider, &control, &progress).await;
     drop(progress);
     bar.await?;
 
     match result {
         Ok(ReceiveOutcome::Saved(received)) => output::print_saved(&received),
         Ok(ReceiveOutcome::Declined(offer)) => output::print_declined(&offer),
+        Ok(ReceiveOutcome::Benchmark { device_name, bytes }) => output::print_bench_received(&device_name, bytes),
         Err(error) => output::print_receive_failed(&error),
     }
     Ok(())

@@ -1,14 +1,19 @@
-//! Sending and receiving files in hashed chunks, with resume after a dropped connection.
+//! Sending and receiving files in hashed chunks over parallel streams, with resume after a dropped connection,
+//! pause and a bandwidth limit.
 //!
-//! Sender and receiver are generic over any `AsyncRead + AsyncWrite + Unpin` stream, so they work the same over TCP
-//! today and QUIC streams later.
+//! Sender and receiver work on any [`Connection`](crate::transport::Connection), so the same code runs over QUIC and
+//! TCP.
 
+mod bench;
 mod chunk;
+mod control;
 mod hash_cache;
 mod path;
 mod progress;
+mod rate_limit;
 mod receiver;
 mod retry;
+mod scheduler;
 mod sender;
 mod state;
 mod writer;
@@ -22,12 +27,18 @@ use std::{
     time::Duration,
 };
 
-pub use chunk::{chunk_count, ChunkHash, ChunkLayout, DEFAULT_CHUNK_SIZE, MAX_CHUNK_COUNT, MAX_CHUNK_SIZE};
+pub use bench::{run_bench, BenchResult};
+pub use chunk::{
+    chunk_count, hash_chunk, root_hash, ChunkHash, ChunkLayout, DEFAULT_CHUNK_SIZE, MAX_CHUNK_COUNT, MAX_CHUNK_SIZE,
+};
+pub use control::TransferControl;
 pub use hash_cache::HASH_CACHE_MAX_AGE;
 pub use path::sanitize_file_name;
 pub use progress::{progress_channel, Progress};
+pub use rate_limit::RateLimit;
 pub use receiver::{receive_file, IncomingOffer, OfferDecider, ReceiveOutcome, ReceivedFile};
 pub use retry::RETRY_WINDOW;
+pub use scheduler::{DEFAULT_STREAMS, MAX_STREAMS};
 pub use sender::{send_file, SendOptions};
 pub use state::{cleanup_stale_parts, PART_SUFFIX, STATE_SUFFIX};
 use tokio::{
@@ -35,6 +46,7 @@ use tokio::{
     time::timeout,
 };
 
+use self::control::Activity;
 use crate::{
     error::{Error, Result},
     protocol::{read_message, write_message, Message},
@@ -46,8 +58,9 @@ use crate::{
 /// [`RETRY_WINDOW`], because it handles one connection at a time and the sender's reconnect waits behind it.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Largest slice of chunk data moved in one read or write (1 MiB), so the idle timeout measures stalls, not chunk size.
-const BUFFER_SIZE: usize = 1024 * 1024;
+/// Largest slice of chunk data moved in one read or write (256 KiB). The idle timeout and the bandwidth limit work
+/// per slice, so they measure stalls and rates, not chunk sizes.
+const BUFFER_SIZE: usize = 256 * 1024;
 
 /// Resume state and hash cache are saved after this many newly completed chunks.
 const SAVE_EVERY_CHUNKS: u32 = 8;
@@ -67,21 +80,40 @@ async fn write_frame<W: AsyncWrite + Unpin>(writer: &mut W, message: &Message) -
     idle(write_message(writer, message)).await
 }
 
-/// Fills `buffer` from `reader`, 1 MiB at a time, each slice with the idle timeout.
-async fn read_exact_idle<R: AsyncRead + Unpin>(reader: &mut R, buffer: &mut [u8]) -> Result<()> {
+/// Fills `buffer` from `reader` one slice at a time, each with the idle timeout, recording activity as data arrives.
+async fn read_exact_tracked<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    buffer: &mut [u8],
+    activity: &Activity,
+) -> Result<()> {
     for slice in buffer.chunks_mut(BUFFER_SIZE) {
         // `read_exact` returns the byte count, which is always the slice length; `?` maps EOF to `ConnectionLost`.
         idle(async { Ok(reader.read_exact(slice).await?) }).await?;
+        activity.touch();
     }
     Ok(())
 }
 
-/// Writes all of `data` to `writer`, 1 MiB at a time, each slice with the idle timeout.
-async fn write_all_idle<W: AsyncWrite + Unpin>(writer: &mut W, data: &[u8]) -> Result<()> {
+/// Writes all of `data` one slice at a time: waits for the bandwidth limit, writes with the idle timeout, and
+/// records activity.
+async fn write_all_limited<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    data: &[u8],
+    rate_limit: &RateLimit,
+    activity: &Activity,
+) -> Result<()> {
     for slice in data.chunks(BUFFER_SIZE) {
+        rate_limit.wait_for(slice.len()).await;
         idle(async { Ok(writer.write_all(slice).await?) }).await?;
+        activity.touch();
     }
     idle(async { Ok(writer.flush().await?) }).await
+}
+
+/// Turns an `Error` message from the peer into a local error, logging its detail.
+fn peer_error(code: crate::ErrorCode, detail: Option<&str>) -> Error {
+    tracing::warn!(code = code.name(), ?detail, "the other device reported an error");
+    Error::from_peer(code)
 }
 
 /// Writes `contents` to a temporary file next to `path` and renames it over `path`, so readers never see a
@@ -108,9 +140,11 @@ mod tests {
         let (mut client, mut server) = duplex(64 * 1024);
         let data: Vec<u8> = (0..3 * BUFFER_SIZE + 5).map(|i| u8::try_from(i % 251).unwrap()).collect();
         let expected = data.clone();
-        let writer = tokio::spawn(async move { write_all_idle(&mut client, &data).await });
+        let writer = tokio::spawn(async move {
+            write_all_limited(&mut client, &data, &RateLimit::default(), &Activity::new()).await
+        });
         let mut received = vec![0; expected.len()];
-        read_exact_idle(&mut server, &mut received).await.unwrap();
+        read_exact_tracked(&mut server, &mut received, &Activity::new()).await.unwrap();
         writer.await.unwrap().unwrap();
         assert_eq!(received, expected);
     }

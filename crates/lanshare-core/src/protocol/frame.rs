@@ -45,13 +45,65 @@ pub async fn read_message<R>(reader: &mut R) -> Result<Message>
 where
     R: AsyncRead + Unpin,
 {
+    decode_frame(&read_raw_frame(reader).await?)
+}
+
+/// Like [`read_message`], but returns `None` if the stream ends cleanly before the next frame starts.
+///
+/// Data streams end this way once the sender has nothing more to send.
+///
+/// # Errors
+///
+/// The same as [`read_message`]; a stream that ends inside a frame is still [`Error::ConnectionLost`].
+pub async fn read_message_or_end<R>(reader: &mut R) -> Result<Option<Message>>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut first = [0u8; 1];
+    if reader.read(&mut first).await? == 0 {
+        return Ok(None);
+    }
+    let mut rest = [0u8; 3];
+    reader.read_exact(&mut rest).await?;
+    let length = u32::from_be_bytes([first[0], rest[0], rest[1], rest[2]]);
+    let payload = read_payload(reader, length).await?;
+    decode_payload(&payload).map(Some)
+}
+
+/// Reads one whole frame, length prefix included, without decoding it.
+///
+/// The TCP listener uses this to look at the first frame of a connection and then hand the untouched bytes on.
+pub(crate) async fn read_raw_frame<R>(reader: &mut R) -> Result<Vec<u8>>
+where
+    R: AsyncRead + Unpin,
+{
     let length = reader.read_u32().await?;
+    let payload = read_payload(reader, length).await?;
+    let mut frame = Vec::with_capacity(4 + payload.len());
+    frame.extend_from_slice(&length.to_be_bytes());
+    frame.extend_from_slice(&payload);
+    Ok(frame)
+}
+
+/// Decodes a frame read by [`read_raw_frame`].
+pub(crate) fn decode_frame(frame: &[u8]) -> Result<Message> {
+    decode_payload(frame.get(4..).unwrap_or_default())
+}
+
+async fn read_payload<R>(reader: &mut R, length: u32) -> Result<Vec<u8>>
+where
+    R: AsyncRead + Unpin,
+{
     if length > MAX_FRAME_SIZE {
         return Err(Error::protocol_violation(format!("incoming frame of {length} bytes is too large")));
     }
     let mut payload = vec![0; length as usize];
     reader.read_exact(&mut payload).await?;
-    postcard::from_bytes(&payload).map_err(|error| match peek_hello_version(&payload) {
+    Ok(payload)
+}
+
+fn decode_payload(payload: &[u8]) -> Result<Message> {
+    postcard::from_bytes(payload).map_err(|error| match peek_hello_version(payload) {
         Some(theirs) if theirs != PROTOCOL_VERSION => Error::VersionMismatch { ours: PROTOCOL_VERSION, theirs },
         _ => Error::protocol_violation(format!("cannot decode message: {error}")),
     })
@@ -102,6 +154,10 @@ mod tests {
             Message::ChunkNack { entry: 0, index: 7 },
             Message::EntryDone { entry: 0, root_hash: [3; 32] },
             Message::Done,
+            Message::DataStreamHello { transfer_id: Uuid::new_v4() },
+            Message::Pause,
+            Message::Resume,
+            Message::BenchOffer { transfer_id: Uuid::new_v4(), size: 2_000_000_000 },
             Message::Error { code: ErrorCode::Io, detail: Some("disk full".into()) },
         ];
         let (mut client, mut server) = duplex(64 * 1024);
@@ -148,6 +204,23 @@ mod tests {
         client.write_all(&payload).await.unwrap();
         let error = read_message(&mut server).await.unwrap_err();
         assert_eq!(error.code(), ErrorCode::VersionMismatch { ours: PROTOCOL_VERSION, theirs: 99 });
+    }
+
+    #[tokio::test]
+    async fn clean_end_between_frames_is_none() {
+        let (mut client, mut server) = duplex(64);
+        write_message(&mut client, &Message::Done).await.unwrap();
+        drop(client);
+        assert_eq!(read_message_or_end(&mut server).await.unwrap(), Some(Message::Done));
+        assert_eq!(read_message_or_end(&mut server).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn raw_frames_decode_to_the_same_message() {
+        let (mut client, mut server) = duplex(64);
+        write_message(&mut client, &Message::Pause).await.unwrap();
+        let frame = read_raw_frame(&mut server).await.unwrap();
+        assert_eq!(decode_frame(&frame).unwrap(), Message::Pause);
     }
 
     #[tokio::test]

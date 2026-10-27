@@ -1,5 +1,6 @@
 //! One module per subcommand, plus the dispatcher.
 
+mod bench;
 mod devices;
 mod receive;
 mod send;
@@ -15,6 +16,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Receive(args) => receive::run(args, &config, !cli.no_mdns).await,
         Command::Send(args) => send::run(args, &config, !cli.no_mdns).await,
         Command::Devices => devices::run(&config, !cli.no_mdns).await,
+        Command::Bench(args) => bench::run(args, &config, !cli.no_mdns).await,
     }
 }
 
