@@ -2,8 +2,8 @@
 
 Transfer large files between computers on the same local network or Wi-Fi.
 
-> Status: phase 2. One file at a time over plain TCP from the command line, with automatic device discovery. There
-> is **no encryption yet**, so only use it on networks you trust.
+> Status: phase 3. One file at a time over plain TCP from the command line, with automatic device discovery, chunk
+> hashing and resume. There is **no encryption yet**, so only use it on networks you trust.
 
 ## Build
 
@@ -36,6 +36,19 @@ lanshare send 192.168.1.20 ./movie.mkv --port 52000
 `send` looks the name up on the network, ignoring upper/lower case. If several devices share the name, it lists them
 and asks you to use an IP address instead.
 
+### Interrupted transfers
+
+Every chunk of a file is checked with a BLAKE3 hash, and the whole file is checked again before it gets its final
+name. While a file arrives it is stored as `<name>.lanshare-part`, next to a `<name>.lanshare-state` file that records
+which parts are complete.
+
+- If the connection drops, `send` reconnects on its own for up to two minutes and continues where it stopped.
+- If `send` gives up or is stopped, run the same command again: it prints `Resuming: ... already received` and sends
+  only what is missing. The same works after restarting `receive`.
+- The receiver checks free space before accepting and refuses files that do not fit.
+- Unfinished `.lanshare-part` and `.lanshare-state` files are deleted when `receive` starts, once they are older than
+  `stale_part_days`.
+
 ### Configuration
 
 The first run creates `config.toml`, shared by the CLI and (later) the desktop app:
@@ -53,6 +66,7 @@ The first run creates `config.toml`, shared by the CLI and (later) the desktop a
 | `port` | `52000` | TCP port for `receive` |
 | `download_dir` | `Downloads/LanShare` | Where received files go |
 | `udp_fallback` | `true` | Also discover over UDP broadcast, for networks that block mDNS |
+| `stale_part_days` | `7` | Delete unfinished transfers older than this many days when `receive` starts |
 
 ### Firewall
 

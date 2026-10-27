@@ -36,6 +36,15 @@ pub fn data_dir() -> Result<PathBuf> {
     ensure_dir(project_dirs()?.data_dir())
 }
 
+/// Directory for the sender's chunk hash cache, inside [`data_dir`].
+///
+/// # Errors
+///
+/// [`Error::Io`] if there is no home directory or the directory cannot be created.
+pub fn hash_cache_dir() -> Result<PathBuf> {
+    ensure_dir(&data_dir()?.join("hash-cache"))
+}
+
 /// Directory for log files.
 ///
 /// # Errors

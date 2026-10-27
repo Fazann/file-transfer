@@ -38,6 +38,15 @@ pub enum ErrorCode {
     Cancelled,
     /// None of the peer's addresses accepted a connection.
     PeerUnreachable,
+    /// A chunk failed its hash check three times, or the whole file failed its root hash check.
+    HashMismatch,
+    /// The receiving volume does not have room for the file.
+    InsufficientSpace {
+        /// Bytes still needed to finish the file.
+        needed: u64,
+        /// Bytes free on the receiving volume.
+        available: u64,
+    },
 }
 
 impl ErrorCode {
@@ -55,6 +64,8 @@ impl ErrorCode {
             Self::ConnectionLost => "CONNECTION_LOST",
             Self::Cancelled => "CANCELLED",
             Self::PeerUnreachable => "PEER_UNREACHABLE",
+            Self::HashMismatch => "HASH_MISMATCH",
+            Self::InsufficientSpace { .. } => "INSUFFICIENT_SPACE",
         }
     }
 }
@@ -97,6 +108,17 @@ pub enum Error {
     /// None of the peer's addresses accepted a connection.
     #[error("PEER_UNREACHABLE")]
     PeerUnreachable,
+    /// Received data did not match its hash.
+    #[error("HASH_MISMATCH")]
+    HashMismatch,
+    /// The receiving volume does not have room for the file.
+    #[error("INSUFFICIENT_SPACE (needed {needed}, available {available})")]
+    InsufficientSpace {
+        /// Bytes still needed to finish the file.
+        needed: u64,
+        /// Bytes free on the receiving volume.
+        available: u64,
+    },
     /// The peer reported an error that has no more specific local variant.
     #[error("PEER: {}", code.name())]
     Peer {
@@ -118,6 +140,10 @@ impl Error {
             Self::ConnectionLost => ErrorCode::ConnectionLost,
             Self::Cancelled => ErrorCode::Cancelled,
             Self::PeerUnreachable => ErrorCode::PeerUnreachable,
+            Self::HashMismatch => ErrorCode::HashMismatch,
+            Self::InsufficientSpace { needed, available } => {
+                ErrorCode::InsufficientSpace { needed: *needed, available: *available }
+            }
             Self::Peer { code } => code.clone(),
         }
     }
@@ -129,6 +155,8 @@ impl Error {
         match code {
             ErrorCode::Declined => Self::Declined,
             ErrorCode::VersionMismatch { ours, theirs } => Self::VersionMismatch { ours: theirs, theirs: ours },
+            ErrorCode::HashMismatch => Self::HashMismatch,
+            ErrorCode::InsufficientSpace { needed, available } => Self::InsufficientSpace { needed, available },
             code => Self::Peer { code },
         }
     }
@@ -160,7 +188,7 @@ impl From<io::Error> for Error {
 mod tests {
     use super::*;
 
-    const ALL_CODES: [ErrorCode; 8] = [
+    const ALL_CODES: [ErrorCode; 10] = [
         ErrorCode::Declined,
         ErrorCode::VersionMismatch { ours: 1, theirs: 2 },
         ErrorCode::InvalidFileName,
@@ -169,6 +197,8 @@ mod tests {
         ErrorCode::ConnectionLost,
         ErrorCode::Cancelled,
         ErrorCode::PeerUnreachable,
+        ErrorCode::HashMismatch,
+        ErrorCode::InsufficientSpace { needed: 2, available: 1 },
     ];
 
     #[test]

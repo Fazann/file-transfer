@@ -4,7 +4,7 @@ mod frame;
 mod message;
 
 pub use frame::{read_message, write_message, MAX_FRAME_SIZE};
-pub use message::Message;
+pub use message::{EntryResume, Message, OfferEntry};
 
 /// Version of the wire format. Increase by 1 on every wire change and record it in `PROTOCOL.md`.
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;

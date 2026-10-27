@@ -3,6 +3,7 @@
 use std::{
     fs, io,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use directories::UserDirs;
@@ -23,7 +24,7 @@ pub const CONFIG_FILE_NAME: &str = "config.toml";
 const MAX_DEVICE_NAME_BYTES: usize = 200;
 
 /// Keys every saved config contains. If one is missing, the file is rewritten with the default filled in.
-const KEYS: [&str; 5] = ["device_id", "device_name", "port", "download_dir", "udp_fallback"];
+const KEYS: [&str; 6] = ["device_id", "device_name", "port", "download_dir", "udp_fallback", "stale_part_days"];
 
 /// Settings stored in `config.toml`.
 ///
@@ -42,6 +43,9 @@ pub struct Config {
     pub download_dir: PathBuf,
     /// Also announce and listen with UDP broadcast, for networks that block mDNS.
     pub udp_fallback: bool,
+    /// Unfinished transfers (`.lanshare-part` and `.lanshare-state` files) untouched for this many days are deleted
+    /// when the receiver starts.
+    pub stale_part_days: u32,
 }
 
 impl Default for Config {
@@ -52,6 +56,7 @@ impl Default for Config {
             port: DEFAULT_PORT,
             download_dir: default_download_dir(),
             udp_fallback: true,
+            stale_part_days: 7,
         }
     }
 }
@@ -106,6 +111,12 @@ impl Config {
         let temporary = path.with_extension("toml.tmp");
         fs::write(&temporary, text).map_err(Error::Io)?;
         fs::rename(&temporary, path).map_err(Error::Io)
+    }
+
+    /// [`Config::stale_part_days`] as a duration.
+    #[must_use]
+    pub fn stale_part_age(&self) -> Duration {
+        Duration::from_secs(u64::from(self.stale_part_days) * 24 * 60 * 60)
     }
 
     /// What this device announces on the network.
@@ -175,6 +186,7 @@ mod tests {
         assert!(path.exists());
         assert_eq!(created.port, DEFAULT_PORT);
         assert!(created.udp_fallback);
+        assert_eq!(created.stale_part_days, 7);
         assert!(created.download_dir.ends_with("LanShare"));
         assert_eq!(Config::load_or_create_at(&path).unwrap(), created, "second load must keep the same id");
     }

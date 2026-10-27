@@ -5,7 +5,7 @@ use std::path::Path;
 use lanshare_core::{
     config::Config,
     discovery::Discovery,
-    transfer::{progress_channel, receive_file, IncomingOffer, OfferDecider, ReceiveOutcome},
+    transfer::{cleanup_stale_parts, progress_channel, receive_file, IncomingOffer, OfferDecider, ReceiveOutcome},
     transport,
 };
 use tokio::net::TcpListener;
@@ -36,6 +36,9 @@ impl OfferDecider for PromptDecider {
 pub async fn run(args: ReceiveArgs, config: &Config, use_mdns: bool) -> anyhow::Result<()> {
     let dir = args.dir.unwrap_or_else(|| config.download_dir.clone());
     tokio::fs::create_dir_all(&dir).await?;
+    if let Err(error) = cleanup_stale_parts(&dir, config.stale_part_age()).await {
+        tracing::warn!(%error, "could not clean up old unfinished transfers");
+    }
     let listener = transport::listen(args.port.unwrap_or(config.port)).await?;
 
     let mut info = config.device_info();

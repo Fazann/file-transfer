@@ -76,17 +76,31 @@ fn peek_hello_version(payload: &[u8]) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use tokio::io::duplex;
+    use uuid::Uuid;
 
     use super::*;
-    use crate::{error::ErrorCode, identity::DeviceId};
+    use crate::{
+        error::ErrorCode,
+        identity::DeviceId,
+        protocol::{EntryResume, OfferEntry},
+    };
 
     #[tokio::test]
     async fn every_message_round_trips() {
         let messages = [
             Message::Hello { protocol_version: 2, device_id: DeviceId::new_random(), device_name: "laptop".into() },
-            Message::Offer { file_name: "movie.mkv".into(), size: 50 * 1024 * 1024 * 1024 },
-            Message::Accept,
-            Message::Reject { code: ErrorCode::VersionMismatch { ours: 1, theirs: 2 } },
+            Message::Offer {
+                transfer_id: Uuid::new_v4(),
+                chunk_size: 8 * 1024 * 1024,
+                entries: vec![OfferEntry { relative_path: "movie.mkv".into(), size: 50 * 1024 * 1024 * 1024 }],
+            },
+            Message::Accept { resume: vec![] },
+            Message::Accept { resume: vec![EntryResume { entry: 0, have: vec![0b1010_0101, 0b1] }] },
+            Message::Reject { code: ErrorCode::InsufficientSpace { needed: 10, available: 5 } },
+            Message::ChunkHeader { entry: 0, index: 7, len: 8 * 1024 * 1024, hash: [9; 32] },
+            Message::ChunkAck { entry: 0, index: 7 },
+            Message::ChunkNack { entry: 0, index: 7 },
+            Message::EntryDone { entry: 0, root_hash: [3; 32] },
             Message::Done,
             Message::Error { code: ErrorCode::Io, detail: Some("disk full".into()) },
         ];
@@ -110,8 +124,9 @@ mod tests {
     #[tokio::test]
     async fn oversized_outgoing_message_is_rejected() {
         let (mut client, _server) = duplex(64);
-        let file_name = "a".repeat(MAX_FRAME_SIZE as usize + 1);
-        let error = write_message(&mut client, &Message::Offer { file_name, size: 1 }).await.unwrap_err();
+        let have = vec![0; MAX_FRAME_SIZE as usize + 1];
+        let message = Message::Accept { resume: vec![EntryResume { entry: 0, have }] };
+        let error = write_message(&mut client, &message).await.unwrap_err();
         assert_eq!(error.code(), ErrorCode::ProtocolViolation);
     }
 

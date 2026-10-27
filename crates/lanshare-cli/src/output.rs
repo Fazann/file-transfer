@@ -20,16 +20,22 @@ const PROGRESS_TEMPLATE: &str =
 
 /// Shows a progress bar driven by `receiver` until its sender is dropped.
 ///
-/// The bar only appears after the first update, so nothing is drawn while a prompt is waiting for an answer.
+/// The bar only appears after the first update, so nothing is drawn while a prompt is waiting for an answer. Each
+/// time a connection resumes a partly sent file, a `Resuming: ...` line is printed above the bar.
 pub fn spawn_progress_bar(mut receiver: watch::Receiver<Progress>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut bar: Option<ProgressBar> = None;
+        let mut last_resumed = 0;
         // `changed()` returns an error once the transfer drops its sender, which ends the loop.
         while receiver.changed().await.is_ok() {
             let progress = *receiver.borrow_and_update();
             let bar = bar.get_or_insert_with(|| new_progress_bar(progress.total));
             bar.set_length(progress.total);
             bar.set_position(progress.transferred);
+            if progress.resumed != last_resumed && progress.resumed > 0 {
+                bar.println(resuming_line(progress.resumed, progress.total));
+            }
+            last_resumed = progress.resumed;
         }
         if let Some(bar) = bar {
             if bar.position() == bar.length().unwrap_or_default() {
@@ -46,6 +52,11 @@ fn new_progress_bar(total: u64) -> ProgressBar {
         .unwrap_or_else(|_| ProgressStyle::default_bar())
         .progress_chars("█▉▊▋▌▍▎▏ ");
     ProgressBar::new(total).with_style(style)
+}
+
+/// For example `Resuming: 1.20 GiB of 8.00 GiB already received`.
+fn resuming_line(resumed: u64, total: u64) -> String {
+    format!("Resuming: {} of {} already received", HumanBytes(resumed), HumanBytes(total))
 }
 
 /// The question asked before accepting an offer.
@@ -150,6 +161,9 @@ pub fn print_declined(offer: &IncomingOffer) {
 /// Printed when one incoming transfer fails; the receiver keeps waiting for the next one.
 pub fn print_receive_failed(error: &Error) {
     eprintln!("Receive failed: {}", describe_error(error));
+    if matches!(error, Error::ConnectionLost) {
+        eprintln!("Anything already received was kept; the transfer continues where it stopped if the sender retries.");
+    }
 }
 
 /// English text for an error code.
@@ -166,6 +180,14 @@ pub fn error_text(code: &ErrorCode) -> String {
         ErrorCode::ConnectionLost => "The connection was lost.".to_owned(),
         ErrorCode::Cancelled => "The transfer was cancelled.".to_owned(),
         ErrorCode::PeerUnreachable => "Could not connect to the device on any of its addresses.".to_owned(),
+        ErrorCode::HashMismatch => {
+            "The received data did not match what was sent. The partial file was kept; try sending again.".to_owned()
+        }
+        ErrorCode::InsufficientSpace { needed, available } => format!(
+            "Not enough free space on the receiving device: {} needed, {} available.",
+            HumanBytes(*needed),
+            HumanBytes(*available)
+        ),
     }
 }
 
@@ -198,6 +220,11 @@ mod tests {
     #[test]
     fn control_characters_are_removed() {
         assert_eq!(printable("evil\u{1b}[2Jname\n"), "evil[2Jname");
+    }
+
+    #[test]
+    fn resuming_line_shows_both_sizes() {
+        assert_eq!(resuming_line(512, 2048), "Resuming: 512 B of 2.00 KiB already received");
     }
 
     #[test]

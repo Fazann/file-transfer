@@ -20,6 +20,12 @@ impl DeviceId {
         Self(Uuid::new_v4())
     }
 
+    /// The 16 raw bytes of the id.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; 16] {
+        self.0.as_bytes()
+    }
+
     /// Parses the hyphenated text form, e.g. `"67e55044-10b1-426f-9247-bb680e5fe0c8"`.
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {

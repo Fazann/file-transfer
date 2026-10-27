@@ -1,4 +1,5 @@
-//! `lanshare send <device-or-ip> <file>`: sends one file to a receiver found by name or IP address.
+//! `lanshare send <device-or-ip> <file>`: sends one file to a receiver found by name or IP address, reconnecting and
+//! resuming if the connection drops.
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -6,7 +7,8 @@ use anyhow::bail;
 use lanshare_core::{
     config::Config,
     discovery::{Discovery, DiscoveryOptions, Peer, PeerEvent},
-    transfer::{progress_channel, send_file},
+    paths,
+    transfer::{progress_channel, send_file, SendOptions},
     transport::{self, PEER_ADDRESS_TIMEOUT},
 };
 use tokio::{
@@ -23,14 +25,17 @@ const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// After the first device with the right name shows up, wait this much longer to spot others with the same name.
 const DUPLICATE_GRACE: Duration = Duration::from_secs(2);
 
-/// Finds the receiver, connects, and sends the file with a progress bar.
+/// Finds the receiver and sends the file with a progress bar.
 pub async fn run(args: SendArgs, config: &Config, use_mdns: bool) -> anyhow::Result<()> {
     let local = config.device_info();
-    let mut stream = connect(&args, config, use_mdns).await?;
+    let destination = resolve(&args, config, use_mdns).await?;
+    // `paths` creates the directory with blocking `std::fs`, so it runs on the blocking pool.
+    let options = SendOptions::new(tokio::task::spawn_blocking(paths::hash_cache_dir).await??);
 
     let (progress, watcher) = progress_channel();
     let bar = output::spawn_progress_bar(watcher);
-    let result = send_file(&mut stream, &args.file, &local, &progress).await;
+    // The closure is called again for every reconnect, always trying the same addresses.
+    let result = send_file(|| destination.connect(), &args.file, &local, &options, &progress).await;
     // Dropping the sender tells the progress bar task to finish.
     drop(progress);
     bar.await?;
@@ -40,14 +45,29 @@ pub async fn run(args: SendArgs, config: &Config, use_mdns: bool) -> anyhow::Res
     Ok(())
 }
 
+/// Where to connect: one address typed by the user, or the addresses of a discovered device.
+enum Destination {
+    Address(SocketAddr),
+    Peer(Vec<SocketAddr>),
+}
+
+impl Destination {
+    async fn connect(&self) -> lanshare_core::Result<TcpStream> {
+        match self {
+            Self::Address(addr) => transport::connect(*addr).await,
+            Self::Peer(addrs) => transport::connect_any(addrs, PEER_ADDRESS_TIMEOUT).await,
+        }
+    }
+}
+
 /// An IP address is used directly; anything else is looked up as a device name.
-async fn connect(args: &SendArgs, config: &Config, use_mdns: bool) -> anyhow::Result<TcpStream> {
+async fn resolve(args: &SendArgs, config: &Config, use_mdns: bool) -> anyhow::Result<Destination> {
     if let Ok(ip) = args.target.parse::<IpAddr>() {
-        return Ok(transport::connect(SocketAddr::new(ip, args.port)).await?);
+        return Ok(Destination::Address(SocketAddr::new(ip, args.port)));
     }
     let peer = find_by_name(&args.target, config, discovery_options(config, false, use_mdns)).await?;
     output::print_connecting(&peer);
-    Ok(transport::connect_any(&peer.socket_addrs(), PEER_ADDRESS_TIMEOUT).await?)
+    Ok(Destination::Peer(peer.socket_addrs()))
 }
 
 /// Looks for exactly one device whose name matches `name`, ignoring case.
