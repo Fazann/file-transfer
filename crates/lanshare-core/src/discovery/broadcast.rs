@@ -19,7 +19,7 @@ use tracing::{debug, warn};
 use super::{peers::Peer, PeerSink};
 use crate::{
     error::{Error, Result},
-    identity::{DeviceId, DeviceInfo, Os},
+    identity::{DeviceId, DeviceInfo, Fingerprint, Os},
 };
 
 /// First bytes of every announcement, so unrelated traffic on the port is ignored cheaply.
@@ -36,6 +36,8 @@ const ERROR_BACKOFF: Duration = Duration::from_secs(1);
 
 /// The UDP announcement: [`MAGIC`] followed by this struct encoded with `postcard`. Same fields as the mDNS TXT
 /// records, plus the port (mDNS carries it in the SRV record) and a `leaving` flag sent once on shutdown.
+///
+/// The fields after `protocol_version` may change with the version, so a peer of another version may not decode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Announcement {
     /// Wire protocol version. Always the first field.
@@ -50,6 +52,8 @@ pub struct Announcement {
     pub port: u16,
     /// `true` in the last announcement before the device stops.
     pub leaving: bool,
+    /// Fingerprint of the device's certificate.
+    pub fingerprint: Fingerprint,
 }
 
 impl Announcement {
@@ -63,6 +67,7 @@ impl Announcement {
             os: info.os,
             port: info.port,
             leaving,
+            fingerprint: info.fingerprint,
         }
     }
 
@@ -94,6 +99,7 @@ impl Announcement {
             addresses: vec![address],
             port: self.port,
             protocol_version: self.protocol_version,
+            fingerprint: self.fingerprint,
             last_seen: Instant::now(),
         }
     }
@@ -245,6 +251,7 @@ mod tests {
             os: Os::Linux,
             port: 52000,
             protocol_version: 2,
+            fingerprint: Fingerprint::from_bytes([9; 32]),
         }
     }
 

@@ -1,0 +1,106 @@
+/* Design tokens for light and dark mode, and base styles. Layout uses logical properties only, so it mirrors in
+   right-to-left languages. */
+
+:root {
+  --font-family: 'Noto Sans', 'Noto Sans Khmer', 'Noto Sans Arabic', system-ui, sans-serif;
+  --font-size-sm: 0.8125rem;
+  --font-size-md: 0.9375rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.5rem;
+  --line-height: 1.5;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+
+  --color-background: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-surface-hover: #eef0f3;
+  --color-border: #d9dde3;
+  --color-text: #1b1f24;
+  --color-text-muted: #5b6470;
+  --color-accent: #2563eb;
+  --color-accent-strong: #1d4ed8;
+  --color-accent-soft: #dbe7ff;
+  --color-on-accent: #ffffff;
+  --color-focus: #2563eb;
+  --color-success: #15803d;
+  --color-success-soft: #dcfce7;
+  --color-warning: #a16207;
+  --color-warning-soft: #fef3c7;
+  --color-danger: #c62828;
+  --shadow-lg: 0 10px 30px rgb(0 0 0 / 15%);
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-background: #111418;
+    --color-surface: #1a1e24;
+    --color-surface-hover: #252a32;
+    --color-border: #313844;
+    --color-text: #e8ebef;
+    --color-text-muted: #9aa3ae;
+    --color-accent: #3b82f6;
+    --color-accent-strong: #93b8ff;
+    --color-accent-soft: #1e2b44;
+    --color-focus: #60a5fa;
+    --color-success: #4ade80;
+    --color-success-soft: #14321f;
+    --color-warning: #fbbf24;
+    --color-warning-soft: #3a2e10;
+    --color-danger: #ef5350;
+    --shadow-lg: 0 10px 30px rgb(0 0 0 / 50%);
+  }
+}
+
+/* Khmer stacks vowels and subscripts above and below the line, so it needs more room. */
+:root:lang(km) {
+  --line-height: 1.7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  block-size: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-text);
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  block-size: 100%;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.3;
+}
+
+:root:lang(km) :is(h1, h2, h3) {
+  line-height: 1.6;
+}
+
+/* File names, paths, IPs and fingerprints are wrapped in <bdi>; keep them left to right and on one line. */
+bdi.ltr {
+  direction: ltr;
+  unicode-bidi: isolate;
+}

@@ -1,9 +1,9 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/*", "app/src-tauri"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
@@ -25,17 +25,32 @@ mdns-sd = "0.21"
 postcard = { version = "1", features = ["alloc"] }
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rcgen = "0.14"
+rusqlite = { version = "0.37", features = ["bundled"] }
+ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-webpki = { version = "0.103", default-features = false, features = ["alloc", "ring"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+spake2 = "0.4"
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-build = { version = "2", features = [] }
+tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-process = "2"
+tauri-plugin-updater = "2"
 socket2 = { version = "0.6", features = ["all"] }
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 toml = "1"
 tracing = "0.1"
+tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

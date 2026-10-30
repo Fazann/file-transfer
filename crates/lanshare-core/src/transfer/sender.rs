@@ -1,26 +1,30 @@
-//! Sending side: offers one file, sends the chunks the receiver does not have yet over parallel data streams, and
-//! reconnects if the connection drops.
+//! Sending side: offers files and folders, sends the chunks the receiver does not have yet over parallel data
+//! streams, and reconnects if the connection drops.
 
 use std::{
+    collections::HashMap,
     future::Future,
     io,
     path::{Path, PathBuf},
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::UNIX_EPOCH,
 };
 
-use tokio::{io::AsyncRead, sync::watch, time::Instant};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt},
+    sync::watch,
+    time::{Duration, Instant},
+};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use super::{
-    chunk::{bitset_contains, bitset_len, root_hash, ChunkHash, ChunkLayout, DEFAULT_CHUNK_SIZE},
+    chunk::{bitset_contains, bitset_len, root_hash, ChunkLayout, DEFAULT_CHUNK_SIZE},
     control::{ControlWriter, TransferControl},
     hash_cache::HashCache,
+    manifest::{build_manifest, ManifestEntry},
     peer_error, read_frame,
     retry::Backoff,
-    sanitize_file_name,
-    scheduler::{send_chunks, ChunkJob, ChunkSource, DEFAULT_STREAMS},
+    scheduler::{send_chunks, ChunkJob, ChunkRef, ChunkSource, DEFAULT_STREAMS},
     Progress,
 };
 use crate::{
@@ -30,10 +34,13 @@ use crate::{
     transport::Connection,
 };
 
+/// After telling the receiver about a cancel, how long to wait for it to close the connection.
+const CANCEL_LINGER: Duration = Duration::from_secs(2);
+
 /// Namespace for transfer ids (UUID v5). Any fixed UUID works; it only has to never change.
 const TRANSFER_NAMESPACE: Uuid = Uuid::from_u128(0x5d1f_3c2a_8b4e_4f6a_9c7d_2e1b_0a39_4c58);
 
-/// Settings for [`send_file`].
+/// Settings for [`send_files`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SendOptions {
     /// Chunk size to offer. Defaults to [`DEFAULT_CHUNK_SIZE`].
@@ -52,25 +59,13 @@ impl SendOptions {
     }
 }
 
-/// Sends the file at `file_path` as device `local`, publishing progress on `progress`.
-///
-/// `connect` opens a new connection to the receiver. It is called once at the start, and again after the connection
-/// drops: then the sender waits 1 s, 2 s, 5 s, 10 s, then every 10 s between attempts, for up to two minutes
-/// ([`RETRY_WINDOW`](super::RETRY_WINDOW)), and sends the same offer so the receiver can resume. The file is read one
-/// chunk at a time and never loaded into memory. `control` pauses, resumes and throttles the transfer while it runs.
-///
-/// `F: FnMut() -> Fut` means "any closure returning a future", like passing a `func() (Conn, error)` in Go.
+/// Sends one file. Shorthand for [`send_files`] with a single path.
 ///
 /// # Errors
 ///
-/// - the first `connect` error, unchanged
-/// - [`Error::ConnectionLost`] if no reconnect succeeded within the retry window
-/// - [`Error::Declined`], [`Error::VersionMismatch`], [`Error::InsufficientSpace`] if the receiver refuses
-/// - [`Error::HashMismatch`] if the receiver could not verify the data
-/// - [`Error::InvalidFileName`] if the path has no usable file name
-/// - [`Error::Io`] if the file cannot be read, is not a regular file, or shrinks while sending
+/// As [`send_files`].
 pub async fn send_file<C, F, Fut>(
-    mut connect: F,
+    connect: F,
     file_path: &Path,
     local: &DeviceInfo,
     options: &SendOptions,
@@ -82,19 +77,60 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<C>>,
 {
-    let source = Source::open(file_path, local.id, options).await?;
-    let mut cache = HashCache::open(&options.hash_cache_dir, source.transfer_id, source.chunks.layout()).await;
+    send_files(connect, &[file_path.to_owned()], local, options, control, progress).await
+}
+
+/// Sends the files and folders at `paths` in one transfer as device `local`, publishing progress on `progress`.
+///
+/// Folders are sent with everything inside them (see `manifest.rs`). `connect` opens a new connection to the
+/// receiver. It is called once at the start, and again after the connection drops: then the sender waits 1 s, 2 s,
+/// 5 s, 10 s, then every 10 s between attempts, for up to two minutes ([`RETRY_WINDOW`](super::RETRY_WINDOW)), and
+/// sends the same offer so the receiver can resume. Files are read one chunk at a time and never loaded into memory.
+/// `control` pauses, resumes, cancels and throttles the transfer while it runs.
+///
+/// `F: FnMut() -> Fut` means "any closure returning a future", like passing a `func() (Conn, error)` in Go.
+///
+/// # Errors
+///
+/// - the first `connect` error, unchanged
+/// - [`Error::ConnectionLost`] if no reconnect succeeded within the retry window
+/// - [`Error::Declined`], [`Error::VersionMismatch`], [`Error::InsufficientSpace`] if the receiver refuses
+/// - [`Error::HashMismatch`] if the receiver could not verify the data
+/// - [`Error::InvalidFileName`] if a name cannot be sent safely, or two picked items have the same name
+/// - [`Error::Io`] if a file cannot be read or shrinks while sending
+/// - [`Error::Cancelled`] if `control` was cancelled
+pub async fn send_files<C, F, Fut>(
+    mut connect: F,
+    paths: &[PathBuf],
+    local: &DeviceInfo,
+    options: &SendOptions,
+    control: &TransferControl,
+    progress: &watch::Sender<Progress>,
+) -> Result<()>
+where
+    C: Connection,
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<C>>,
+{
+    let source = Source::open(paths, local.id, options).await?;
+    let mut caches = source.open_caches(&options.hash_cache_dir).await;
     let session = Session { source: &source, local, streams: options.streams, control, progress };
-    let mut connection = connect().await?;
+    // A running session watches for cancelling itself, so it can tell the receiver; connecting and waiting to
+    // reconnect stop here.
+    let mut connection = until_cancelled(control, connect()).await?;
     let mut backoff: Option<Backoff> = None;
     loop {
         let mut acked = 0;
-        let result = session.run(&connection, &mut cache, &mut acked).await;
-        cache.save().await;
+        let result = session.run(&connection, &mut caches, &mut acked).await;
+        for cache in &mut caches {
+            cache.save().await;
+        }
         match result {
             Ok(()) => {
-                cache.remove().await;
-                info!(file_name = %source.entry.relative_path, size = source.entry.size, "file sent");
+                for cache in caches {
+                    cache.remove().await;
+                }
+                info!(entries = source.entries.len(), size = source.total_size(), "sent");
                 return Ok(());
             }
             Err(Error::ConnectionLost) => {
@@ -106,10 +142,18 @@ where
                     _ => backoff.insert(Backoff::new(Instant::now())),
                 };
                 warn!("connection lost, reconnecting");
-                connection = reconnect(&mut connect, backoff).await?;
+                connection = until_cancelled(control, reconnect(&mut connect, backoff)).await?;
             }
             Err(error) => return Err(error),
         }
+    }
+}
+
+/// Runs `operation`, or fails with [`Error::Cancelled`] as soon as `control` is cancelled.
+async fn until_cancelled<T>(control: &TransferControl, operation: impl Future<Output = Result<T>>) -> Result<T> {
+    tokio::select! {
+        result = operation => result,
+        () = control.cancelled() => Err(Error::Cancelled),
     }
 }
 
@@ -132,90 +176,116 @@ where
     Err(Error::ConnectionLost)
 }
 
-/// The file being sent: everything that stays the same across reconnects.
+/// What is being sent: everything that stays the same across reconnects.
 struct Source {
-    chunks: ChunkSource,
     transfer_id: Uuid,
-    entry: OfferEntry,
+    chunk_size: u32,
+    /// What the offer lists, in order.
+    entries: Vec<OfferEntry>,
+    /// The data of each entry, `None` for folders.
+    chunks: Vec<Option<ChunkSource>>,
 }
 
 impl Source {
-    async fn open(file_path: &Path, device_id: DeviceId, options: &SendOptions) -> Result<Self> {
-        let relative_path = offer_file_name(file_path)?;
-        // Local file errors use `map_err(Error::Io)` so `?` cannot mistake them for a lost connection.
-        let file = tokio::fs::File::open(file_path).await.map_err(Error::Io)?;
-        let metadata = file.metadata().await.map_err(Error::Io)?;
-        if !metadata.is_file() {
-            return Err(Error::Io(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file")));
+    async fn open(paths: &[PathBuf], device_id: DeviceId, options: &SendOptions) -> Result<Self> {
+        let paths = paths.to_vec();
+        let manifest = tokio::task::spawn_blocking(move || build_manifest(&paths))
+            .await
+            .map_err(|error| Error::Io(io::Error::other(error)))??;
+        let mut entries = Vec::with_capacity(manifest.len());
+        let mut chunks = Vec::with_capacity(manifest.len());
+        for item in &manifest {
+            entries.push(OfferEntry { relative_path: item.relative.as_wire(), size: item.size });
+            chunks.push(match &item.source {
+                Some(path) => Some(ChunkSource::new(path.clone(), ChunkLayout::new(item.size, options.chunk_size)?)),
+                None => None,
+            });
         }
-        let size = metadata.len();
-        let modified = metadata.modified().map_err(Error::Io)?;
-        let absolute_path = tokio::fs::canonicalize(file_path).await.map_err(Error::Io)?;
-        let layout = ChunkLayout::new(size, options.chunk_size)?;
-        Ok(Self {
-            chunks: ChunkSource::new(Arc::new(file.into_std().await), layout),
-            transfer_id: transfer_id(device_id, &absolute_path, size, modified),
-            entry: OfferEntry { relative_path, size },
-        })
+        Ok(Self { transfer_id: transfer_id(device_id, &manifest), chunk_size: options.chunk_size, entries, chunks })
     }
 
-    fn layout(&self) -> &ChunkLayout {
-        self.chunks.layout()
+    fn total_size(&self) -> u64 {
+        self.entries.iter().map(|entry| entry.size).sum()
     }
 
     fn offer(&self) -> Message {
-        // Exactly one entry until phase 7 adds folders.
-        Message::Offer {
-            transfer_id: self.transfer_id,
-            chunk_size: self.layout().chunk_size(),
-            entries: vec![self.entry.clone()],
-        }
+        Message::Offer { transfer_id: self.transfer_id, chunk_size: self.chunk_size, entries: self.entries.clone() }
     }
 
-    /// Root hash of the whole file. Chunk hashes come from the cache, or are read and hashed from disk (no network).
-    async fn root_hash(&self, cache: &mut HashCache) -> Result<ChunkHash> {
-        let mut hashes = Vec::new();
-        for index in 0..self.layout().count() {
-            let hash = if let Some(hash) = cache.get(index) {
-                hash
+    /// One hash cache per entry. Only files of several chunks keep theirs on disk; one chunk is cheap to hash again,
+    /// and a folder of thousands of small files should not leave thousands of cache files.
+    async fn open_caches(&self, dir: &Path) -> Vec<HashCache> {
+        let mut caches = Vec::with_capacity(self.chunks.len());
+        for (index, chunks) in self.chunks.iter().enumerate() {
+            let layout = chunks.as_ref().map_or_else(|| ChunkLayout::empty(self.chunk_size), |chunks| *chunks.layout());
+            let id = entry_cache_id(self.transfer_id, index);
+            caches.push(if layout.count() > 1 {
+                HashCache::open(dir, id, &layout).await
             } else {
-                let (_buffer, hash) = self.chunks.read(index, Vec::new()).await?;
-                cache.record(index, hash).await;
-                hash
-            };
-            hashes.push(hash);
+                HashCache::in_memory(id, &layout)
+            });
         }
-        Ok(root_hash(&hashes))
+        caches
     }
 
-    /// Bytes covered by the chunks set in `have`.
-    fn bytes_in(&self, have: &[u8]) -> u64 {
-        let layout = self.layout();
-        (0..layout.count())
-            .filter(|index| bitset_contains(have, *index))
-            .map(|index| u64::from(layout.len(index)))
+    /// Bytes covered by the chunks the receiver already has.
+    fn bytes_in(&self, have: &HashMap<u32, Vec<u8>>) -> u64 {
+        have.iter()
+            .filter_map(|(entry, bits)| Some((self.chunks.get(*entry as usize)?.as_ref()?.layout(), bits)))
+            .map(|(layout, bits)| {
+                (0..layout.count())
+                    .filter(|index| bitset_contains(bits, *index))
+                    .map(|index| u64::from(layout.len(index)))
+                    .sum::<u64>()
+            })
             .sum()
     }
+
+    /// Chunks the receiver lacks, in entry order, and the entries it lacks nothing of (folders, empty files, and
+    /// files it already has completely).
+    fn plan(&self, have: &HashMap<u32, Vec<u8>>) -> (Vec<ChunkRef>, Vec<u32>) {
+        let mut missing = Vec::new();
+        let mut complete = Vec::new();
+        for (index, chunks) in self.chunks.iter().enumerate() {
+            let entry = u32::try_from(index).unwrap_or(u32::MAX);
+            let before = missing.len();
+            if let Some(chunks) = chunks {
+                let bits = have.get(&entry).map_or(&[][..], Vec::as_slice);
+                let count = chunks.layout().count();
+                missing.extend((0..count).filter(|chunk| !bitset_contains(bits, *chunk)).map(|chunk| (entry, chunk)));
+            }
+            if missing.len() == before {
+                complete.push(entry);
+            }
+        }
+        (missing, complete)
+    }
 }
 
-/// The name to put in the offer: the last path component, which must be valid UTF-8 and pass sanitizing.
-fn offer_file_name(file_path: &Path) -> Result<String> {
-    let name = file_path.file_name().and_then(|name| name.to_str()).ok_or(Error::InvalidFileName)?;
-    sanitize_file_name(name)
-}
-
-/// UUID v5 of (sender device id, absolute source path, size, modified time). Retrying the same unchanged file gives
-/// the same id; editing the file gives a new one, so stale chunks are never reused.
-fn transfer_id(device_id: DeviceId, absolute_path: &Path, size: u64, modified: SystemTime) -> Uuid {
-    let since_epoch = modified.duration_since(UNIX_EPOCH).unwrap_or_default();
+/// UUID v5 over the sender's device id and every entry's path, size, modified time and source. Retrying the same
+/// unchanged selection gives the same id; any change gives a new one, so stale chunks are never reused.
+fn transfer_id(device_id: DeviceId, manifest: &[ManifestEntry]) -> Uuid {
     let mut name = Vec::new();
     name.extend_from_slice(device_id.as_bytes());
-    name.extend_from_slice(&size.to_le_bytes());
-    name.extend_from_slice(&since_epoch.as_secs().to_le_bytes());
-    name.extend_from_slice(&since_epoch.subsec_nanos().to_le_bytes());
-    // The path goes last because it is the only part with a variable length.
-    name.extend_from_slice(absolute_path.as_os_str().as_encoded_bytes());
+    for entry in manifest {
+        let since_epoch = entry.modified.duration_since(UNIX_EPOCH).unwrap_or_default();
+        let wire = entry.relative.as_wire();
+        // Lengths go before variable-length parts, so two different lists can never produce the same bytes.
+        name.extend_from_slice(&(wire.len() as u64).to_le_bytes());
+        name.extend_from_slice(wire.as_bytes());
+        name.extend_from_slice(&entry.size.to_le_bytes());
+        name.extend_from_slice(&since_epoch.as_secs().to_le_bytes());
+        name.extend_from_slice(&since_epoch.subsec_nanos().to_le_bytes());
+        let source = entry.source.as_deref().map(|path| path.as_os_str().as_encoded_bytes()).unwrap_or_default();
+        name.extend_from_slice(&(source.len() as u64).to_le_bytes());
+        name.extend_from_slice(source);
+    }
     Uuid::new_v5(&TRANSFER_NAMESPACE, &name)
+}
+
+/// The hash cache id of one entry: derived from the transfer id, so each entry has its own cache file.
+fn entry_cache_id(transfer_id: Uuid, entry: usize) -> Uuid {
+    Uuid::new_v5(&transfer_id, &(entry as u64).to_le_bytes())
 }
 
 /// Everything one connection attempt needs that does not change between attempts.
@@ -228,54 +298,92 @@ struct Session<'a> {
 }
 
 impl Session<'_> {
-    /// One connection: hello and offer, the missing chunks, `EntryDone`, `Done`, and the receiver's `Done`.
-    async fn run<C: Connection>(&self, connection: &C, cache: &mut HashCache, acked: &mut u64) -> Result<()> {
+    /// One connection: hello and offer, the missing chunks with an `EntryDone` per entry, `Done`, and the receiver's
+    /// `Done`.
+    async fn run<C: Connection>(&self, connection: &C, caches: &mut [HashCache], acked: &mut u64) -> Result<()> {
         let (send, mut replies) = connection.open_control().await?;
         let writer = ControlWriter::new(send);
+        tokio::select! {
+            result = self.exchange(connection, &writer, &mut replies, caches, acked) => return result,
+            () = self.control.cancelled() => {}
+        }
+        info!("transfer cancelled on this device");
+        // Best effort: tell the receiver, so it does not wait for a reconnect. Dropping a QUIC connection discards
+        // data still on its way, so wait briefly for the receiver to close first.
+        let _ = writer.send(&Message::Error { code: crate::ErrorCode::Cancelled, detail: None }).await;
+        writer.shutdown().await;
+        let mut buffer = [0; 256];
+        let drain = async { while matches!(replies.read(&mut buffer).await, Ok(read) if read > 0) {} };
+        let _ = tokio::time::timeout(CANCEL_LINGER, drain).await;
+        Err(Error::Cancelled)
+    }
+
+    async fn exchange<C: Connection, R: AsyncRead + Unpin>(
+        &self,
+        connection: &C,
+        writer: &ControlWriter,
+        replies: &mut R,
+        caches: &mut [HashCache],
+        acked: &mut u64,
+    ) -> Result<()> {
         let local = self.local;
         let hello =
             Message::Hello { protocol_version: PROTOCOL_VERSION, device_id: local.id, device_name: local.name.clone() };
         writer.send(&hello).await?;
         writer.send(&self.source.offer()).await?;
-        let have = wait_for_accept(&mut replies, self.source.layout()).await?;
+        let have = wait_for_accept(replies, self.source).await?;
 
-        let size = self.source.entry.size;
+        let total = self.source.total_size();
         let resumed = self.source.bytes_in(&have);
         if resumed > 0 {
-            info!(resumed, size, "receiver already has part of the file, resuming");
+            info!(resumed, total, "receiver already has part of the transfer, resuming");
         }
-        self.progress.send_replace(Progress { transferred: resumed, total: size, resumed });
-        let layout = self.source.layout();
-        let missing: Vec<u64> = (0..layout.count()).filter(|index| !bitset_contains(&have, *index)).collect();
+        self.progress.send_replace(Progress { transferred: resumed, total, resumed, current_entry: 0 });
+        let (missing, complete) = self.source.plan(&have);
+        for entry in complete {
+            self.entry_done(writer, entry, caches).await?;
+        }
         if !missing.is_empty() {
             let job = ChunkJob {
-                source: &self.source.chunks,
+                sources: &self.source.chunks,
                 transfer_id: self.source.transfer_id,
                 missing,
                 streams: self.streams,
                 control: self.control,
             };
-            send_chunks(connection, job, &mut replies, &writer, cache, self.progress, acked).await?;
+            send_chunks(connection, job, replies, writer, caches, self.progress, acked).await?;
         }
-
-        let root_hash = self.source.root_hash(cache).await?;
-        writer.send(&Message::EntryDone { entry: 0, root_hash }).await?;
         writer.send(&Message::Done).await?;
-        wait_for_done(&mut replies).await?;
+        wait_for_done(replies).await?;
         writer.shutdown().await;
         Ok(())
     }
+
+    /// Sends `EntryDone` for an entry the receiver needs no chunks of.
+    async fn entry_done(&self, writer: &ControlWriter, entry: u32, caches: &mut [HashCache]) -> Result<()> {
+        let index = entry as usize;
+        let root_hash = match (self.source.chunks.get(index).and_then(Option::as_ref), caches.get_mut(index)) {
+            (Some(chunks), Some(cache)) => {
+                let root = chunks.root_hash(cache).await?;
+                chunks.close();
+                root
+            }
+            // A folder has no chunks; its root is the hash of an empty list, like an empty file's.
+            _ => root_hash(&[]),
+        };
+        writer.send(&Message::EntryDone { entry, root_hash }).await
+    }
 }
 
-/// Waits for the receiver's answer to the offer and returns the bitset of chunks it already has.
+/// Waits for the receiver's answer to the offer and returns the chunks it already has, per entry.
 ///
 /// No timeout here: the receiver may be waiting for a person to accept.
-async fn wait_for_accept<R>(replies: &mut R, layout: &ChunkLayout) -> Result<Vec<u8>>
+async fn wait_for_accept<R>(replies: &mut R, source: &Source) -> Result<HashMap<u32, Vec<u8>>>
 where
     R: AsyncRead + Unpin,
 {
     match read_message(replies).await? {
-        Message::Accept { resume } => resume_bitset(&resume, layout),
+        Message::Accept { resume } => resume_bitsets(&resume, &source.chunks),
         Message::Reject { code } => {
             debug!(code = code.name(), "offer rejected");
             Err(Error::from_peer(code))
@@ -300,41 +408,59 @@ where
     }
 }
 
-/// Checks the `resume` list from `Accept` against the single offered entry.
-fn resume_bitset(resume: &[EntryResume], layout: &ChunkLayout) -> Result<Vec<u8>> {
-    match resume {
-        [] => Ok(Vec::new()),
-        [EntryResume { entry: 0, have }] if have.len() as u64 == bitset_len(layout.count()) => Ok(have.clone()),
-        _ => Err(Error::protocol_violation(format!("bad resume list {resume:?}"))),
+/// Checks the `resume` list from `Accept`: each entry at most once, a file entry, with a bitset of the right length.
+fn resume_bitsets(resume: &[EntryResume], chunks: &[Option<ChunkSource>]) -> Result<HashMap<u32, Vec<u8>>> {
+    let mut have = HashMap::new();
+    for EntryResume { entry, have: bits } in resume {
+        let layout = chunks.get(*entry as usize).and_then(Option::as_ref).map(ChunkSource::layout);
+        let fits = layout.is_some_and(|layout| bits.len() as u64 == bitset_len(layout.count()));
+        if !fits || have.insert(*entry, bits.clone()).is_some() {
+            return Err(Error::protocol_violation(format!("bad resume list entry {entry}")));
+        }
     }
+    Ok(have)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
 
     use super::*;
+    use crate::transfer::sanitize_relative_path;
+
+    fn entry(path: &str, size: u64, modified: SystemTime) -> ManifestEntry {
+        let relative = sanitize_relative_path(path).unwrap();
+        ManifestEntry { source: Some(PathBuf::from("/home/me").join(path)), relative, size, modified }
+    }
 
     #[test]
-    fn transfer_id_is_stable_and_changes_with_the_file() {
+    fn transfer_id_is_stable_and_changes_with_the_files() {
         let device = DeviceId::new_random();
-        let path = Path::new("/home/me/movie.mkv");
         let modified = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let id = transfer_id(device, path, 100, modified);
-        assert_eq!(id, transfer_id(device, path, 100, modified));
-        assert_ne!(id, transfer_id(device, path, 101, modified));
-        assert_ne!(id, transfer_id(device, path, 100, modified + Duration::from_nanos(1)));
-        assert_ne!(id, transfer_id(device, Path::new("/home/me/other.mkv"), 100, modified));
-        assert_ne!(id, transfer_id(DeviceId::new_random(), path, 100, modified));
+        let files = vec![entry("movie.mkv", 100, modified)];
+        let id = transfer_id(device, &files);
+        assert_eq!(id, transfer_id(device, &files));
+        assert_ne!(id, transfer_id(device, &[entry("movie.mkv", 101, modified)]));
+        assert_ne!(id, transfer_id(device, &[entry("movie.mkv", 100, modified + Duration::from_nanos(1))]));
+        assert_ne!(id, transfer_id(device, &[entry("other.mkv", 100, modified)]));
+        assert_ne!(id, transfer_id(DeviceId::new_random(), &files));
+        let more = vec![entry("movie.mkv", 100, modified), entry("notes.txt", 1, modified)];
+        assert_ne!(id, transfer_id(device, &more));
     }
 
     #[test]
     fn resume_list_must_match_the_offer() {
-        let layout = ChunkLayout::new(100, 10).unwrap();
-        assert_eq!(resume_bitset(&[], &layout).unwrap(), Vec::<u8>::new());
-        let good = vec![EntryResume { entry: 0, have: vec![1, 2] }];
-        assert_eq!(resume_bitset(&good, &layout).unwrap(), vec![1, 2]);
-        assert!(resume_bitset(&[EntryResume { entry: 0, have: vec![1] }], &layout).is_err());
-        assert!(resume_bitset(&[EntryResume { entry: 1, have: vec![1, 2] }], &layout).is_err());
+        let source = |size| Some(ChunkSource::new(PathBuf::from("/x"), ChunkLayout::new(size, 10).unwrap()));
+        let chunks = vec![source(100), None, source(5)];
+        assert!(resume_bitsets(&[], &chunks).unwrap().is_empty());
+        let good = [EntryResume { entry: 0, have: vec![1, 2] }, EntryResume { entry: 2, have: vec![1] }];
+        assert_eq!(resume_bitsets(&good, &chunks).unwrap().len(), 2);
+        let short = [EntryResume { entry: 0, have: vec![1] }];
+        assert!(resume_bitsets(&short, &chunks).is_err());
+        let folder = [EntryResume { entry: 1, have: vec![] }];
+        assert!(resume_bitsets(&folder, &chunks).is_err());
+        let twice = [EntryResume { entry: 2, have: vec![1] }, EntryResume { entry: 2, have: vec![1] }];
+        assert!(resume_bitsets(&twice, &chunks).is_err());
+        assert!(resume_bitsets(&[EntryResume { entry: 9, have: vec![] }], &chunks).is_err());
     }
 }

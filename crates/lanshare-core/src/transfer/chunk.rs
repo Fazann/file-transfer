@@ -49,6 +49,12 @@ impl ChunkLayout {
         Ok(Self { size, chunk_size })
     }
 
+    /// The layout of an empty file or a folder: no chunks.
+    #[must_use]
+    pub fn empty(chunk_size: u32) -> Self {
+        Self { size: 0, chunk_size }
+    }
+
     /// File size in bytes.
     #[must_use]
     pub fn size(&self) -> u64 {

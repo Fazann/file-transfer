@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{Error, Result},
-    identity::{DeviceId, DeviceInfo, Os},
+    identity::{DeviceId, DeviceInfo, Fingerprint, Os},
     paths,
     protocol::PROTOCOL_VERSION,
     transfer::{DEFAULT_STREAMS, MAX_STREAMS},
@@ -25,7 +25,7 @@ pub const CONFIG_FILE_NAME: &str = "config.toml";
 const MAX_DEVICE_NAME_BYTES: usize = 200;
 
 /// Keys every saved config contains. If one is missing, the file is rewritten with the default filled in.
-const KEYS: [&str; 8] = [
+const KEYS: [&str; 9] = [
     "device_id",
     "device_name",
     "port",
@@ -34,6 +34,7 @@ const KEYS: [&str; 8] = [
     "stale_part_days",
     "streams",
     "bandwidth_limit_mbps",
+    "allow_untrusted",
 ];
 
 /// Settings stored in `config.toml`.
@@ -60,6 +61,9 @@ pub struct Config {
     pub streams: usize,
     /// Bandwidth limit for outgoing transfers in MB/s (1 MB = 1,000,000 bytes). `0` means unlimited.
     pub bandwidth_limit_mbps: u32,
+    /// Let devices that are not paired offer files (the user is still asked). Off by default: unpaired devices are
+    /// rejected with `UNTRUSTED_DEVICE`. Traffic is encrypted either way.
+    pub allow_untrusted: bool,
 }
 
 impl Default for Config {
@@ -73,6 +77,7 @@ impl Default for Config {
             stale_part_days: 7,
             streams: DEFAULT_STREAMS,
             bandwidth_limit_mbps: 0,
+            allow_untrusted: false,
         }
     }
 }
@@ -136,15 +141,16 @@ impl Config {
         Duration::from_secs(u64::from(self.stale_part_days) * 24 * 60 * 60)
     }
 
-    /// What this device announces on the network.
+    /// What this device announces on the network, with the fingerprint of its certificate.
     #[must_use]
-    pub fn device_info(&self) -> DeviceInfo {
+    pub fn device_info(&self, fingerprint: Fingerprint) -> DeviceInfo {
         DeviceInfo {
             id: self.device_id,
             name: self.device_name.clone(),
             os: Os::current(),
             port: self.port,
             protocol_version: PROTOCOL_VERSION,
+            fingerprint,
         }
     }
 }
@@ -206,6 +212,7 @@ mod tests {
         assert_eq!(created.stale_part_days, 7);
         assert_eq!(created.streams, 4);
         assert_eq!(created.bandwidth_limit_mbps, 0);
+        assert!(!created.allow_untrusted);
         assert!(created.download_dir.ends_with("LanShare"));
         assert_eq!(Config::load_or_create_at(&path).unwrap(), created, "second load must keep the same id");
     }

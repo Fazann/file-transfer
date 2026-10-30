@@ -6,7 +6,7 @@ use std::{
     time::Instant,
 };
 
-use crate::identity::{DeviceId, Os};
+use crate::identity::{DeviceId, Fingerprint, Os};
 
 /// A device found on the network.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +23,8 @@ pub struct Peer {
     pub port: u16,
     /// Wire protocol version the device speaks.
     pub protocol_version: u16,
+    /// Fingerprint of the device's certificate, as advertised. Unproven until a TLS handshake checks it.
+    pub fingerprint: Fingerprint,
     /// When the device was last heard from.
     pub last_seen: Instant,
 }
@@ -111,7 +113,8 @@ impl PeerTable {
         let mut changed = existing.name != peer.name
             || existing.os != peer.os
             || existing.port != peer.port
-            || existing.protocol_version != peer.protocol_version;
+            || existing.protocol_version != peer.protocol_version
+            || existing.fingerprint != peer.fingerprint;
         for address in peer.addresses {
             if !existing.addresses.contains(&address) {
                 existing.addresses.push(address);
@@ -122,6 +125,7 @@ impl PeerTable {
         existing.os = peer.os;
         existing.port = peer.port;
         existing.protocol_version = peer.protocol_version;
+        existing.fingerprint = peer.fingerprint;
         existing.last_seen = existing.last_seen.max(peer.last_seen);
         changed.then(|| PeerEvent::Updated(existing.clone()))
     }
@@ -167,6 +171,7 @@ mod tests {
             addresses: addresses.to_vec(),
             port: 52000,
             protocol_version: 2,
+            fingerprint: Fingerprint::from_bytes([1; 32]),
             last_seen,
         }
     }

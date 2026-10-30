@@ -6,9 +6,11 @@ pub mod config;
 pub mod discovery;
 pub mod error;
 pub mod identity;
+pub mod pairing;
 pub mod paths;
 pub mod protocol;
+pub mod service;
 pub mod transfer;
 pub mod transport;
 
-pub use error::{Error, ErrorCode, Result};
+pub use error::{Error, ErrorCode, Result, ERROR_CODE_NAMES};

@@ -5,6 +5,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::Fingerprint;
+
 /// Stable, random id of a device. Generated once and stored in `config.toml`.
 ///
 /// This is a "newtype": a struct with one field that gives `Uuid` its own type, so a `DeviceId` cannot be mixed up
@@ -101,6 +103,8 @@ pub struct DeviceInfo {
     pub port: u16,
     /// Wire protocol version the device speaks.
     pub protocol_version: u16,
+    /// Fingerprint of the device's certificate.
+    pub fingerprint: Fingerprint,
 }
 
 #[cfg(test)]

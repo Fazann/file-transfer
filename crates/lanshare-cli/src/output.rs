@@ -1,16 +1,19 @@
 //! Everything the CLI shows to people: progress bars, prompts, status lines and English error text.
 
 use std::{
+    collections::HashMap,
     io::{self, BufRead, Write},
-    path::Path,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
-use indicatif::{DecimalBytes, HumanBytes, ProgressBar, ProgressStyle};
+use indicatif::{DecimalBytes, HumanBytes, MultiProgress, ProgressBar, ProgressStyle};
 use lanshare_core::{
     discovery::Peer,
-    identity::Os,
-    transfer::{BenchResult, IncomingOffer, Progress, ReceivedFile},
+    identity::{DeviceInfo, Os, TrustedDevice},
+    pairing::{PairingPeer, LOCK_DURATION, PIN_ENTRY_TIMEOUT},
+    service::{TransferId, TransferInfo},
+    transfer::{BenchResult, IncomingOffer, Progress},
     transport::TransportKind,
     Error, ErrorCode,
 };
@@ -48,6 +51,56 @@ pub fn spawn_progress_bar(mut receiver: watch::Receiver<Progress>) -> JoinHandle
     })
 }
 
+/// One progress bar per incoming transfer, for `lanshare receive`, which may receive several files at once.
+pub struct TransferBars {
+    bars: MultiProgress,
+    active: HashMap<TransferId, (ProgressBar, TransferInfo, u64)>,
+}
+
+impl TransferBars {
+    /// No bars yet.
+    pub fn new() -> Self {
+        Self { bars: MultiProgress::new(), active: HashMap::new() }
+    }
+
+    /// Adds a bar for a transfer that started.
+    pub fn start(&mut self, info: TransferInfo) {
+        let bar = self.bars.add(new_progress_bar(info.size));
+        bar.set_message(info.file_name.clone());
+        self.active.insert(info.id, (bar, info, 0));
+    }
+
+    /// Moves a bar; prints a `Resuming: ...` line when a transfer continues a partial file.
+    pub fn update(&mut self, id: TransferId, progress: Progress) {
+        let Some((bar, _, last_resumed)) = self.active.get_mut(&id) else { return };
+        bar.set_length(progress.total);
+        bar.set_position(progress.transferred);
+        if progress.resumed != *last_resumed && progress.resumed > 0 {
+            bar.println(resuming_line(progress.resumed, progress.total));
+        }
+        *last_resumed = progress.resumed;
+    }
+
+    /// Finishes a bar and says where the file was saved.
+    pub fn complete(&mut self, id: TransferId, path: Option<&Path>) {
+        let Some((bar, info, _)) = self.active.remove(&id) else { return };
+        bar.finish_and_clear();
+        if let Some(path) = path {
+            println!("Saved {} ({}) from {}", path.display(), HumanBytes(info.size), printable(&info.peer_name));
+        }
+    }
+
+    /// Drops a bar and says why the transfer failed.
+    pub fn fail(&mut self, id: TransferId, error: &ErrorCode) {
+        let Some((bar, info, _)) = self.active.remove(&id) else { return };
+        bar.abandon();
+        eprintln!("Receiving {} failed: {}", info.file_name, error_text(error));
+        if matches!(error, ErrorCode::ConnectionLost | ErrorCode::Cancelled) {
+            eprintln!("Anything already received was kept; sending the file again continues where it stopped.");
+        }
+    }
+}
+
 fn new_progress_bar(total: u64) -> ProgressBar {
     let style = ProgressStyle::with_template(PROGRESS_TEMPLATE)
         .unwrap_or_else(|_| ProgressStyle::default_bar())
@@ -60,9 +113,17 @@ fn resuming_line(resumed: u64, total: u64) -> String {
     format!("Resuming: {} of {} already received", HumanBytes(resumed), HumanBytes(total))
 }
 
-/// The question asked before accepting an offer.
+/// The question asked before accepting an offer. Unpaired senders (only possible with `allow_untrusted`) are marked.
 pub fn offer_question(offer: &IncomingOffer) -> String {
-    format!("Accept {} ({}) from {}? [y/N] ", offer.file_name, HumanBytes(offer.size), printable(&offer.device_name))
+    let unpaired =
+        if offer.trusted { String::new() } else { format!(", NOT PAIRED, fingerprint {}", offer.fingerprint) };
+    let files = if offer.file_count == 1 { String::new() } else { format!("{} files, ", offer.file_count) };
+    format!(
+        "Accept {} ({files}{}) from {}{unpaired}? [y/N] ",
+        printable(&offer.file_name),
+        HumanBytes(offer.size),
+        printable(&offer.device_name)
+    )
 }
 
 /// Prints `question` and reads a yes/no answer from stdin. Anything but `y` or `yes` means no.
@@ -80,10 +141,117 @@ pub fn ask_yes_no(question: &str) -> bool {
     matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
+/// Prints `question` and reads one line from stdin. `None` if stdin is closed or unreadable.
+///
+/// This blocks the thread, so call it inside `spawn_blocking`.
+pub fn ask_line(question: &str) -> Option<String> {
+    print!("{question}");
+    io::stdout().flush().ok()?;
+    let mut answer = String::new();
+    match io::stdin().lock().read_line(&mut answer) {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(answer.trim().to_owned()),
+    }
+}
+
 /// Printed once the receiver is listening and advertising itself.
-pub fn print_listening(device_name: &str, port: u16, dir: &Path) {
-    println!("Receiving as \"{device_name}\" on port {port}, saving to {}", dir.display());
+pub fn print_listening(info: &DeviceInfo, dir: &Path) {
+    println!(
+        "Receiving as \"{}\" (fingerprint {}) on port {}, saving to {}",
+        info.name,
+        info.fingerprint,
+        info.port,
+        dir.display()
+    );
     println!("Press Ctrl+C to stop.");
+}
+
+/// Printed by the receiver when another device asks to pair.
+pub fn print_pairing_pin(peer: &PairingPeer, pin: &str) {
+    println!();
+    println!("{} (fingerprint {}) wants to pair with this device.", printable(&peer.device_name), peer.fingerprint);
+    println!("To allow it, type this PIN on that device within {} seconds:", PIN_ENTRY_TIMEOUT.as_secs());
+    println!();
+    println!("    {} {}", &pin[..3], &pin[3..]);
+    println!();
+}
+
+/// The prompt for the PIN on the device that started pairing.
+pub fn pin_question(receiver: &PairingPeer) -> String {
+    format!(
+        "Pairing with {} (fingerprint {}).\nEnter the PIN shown on that device: ",
+        printable(&receiver.device_name),
+        receiver.fingerprint
+    )
+}
+
+/// Printed by `send` and `bench` before pairing with a receiver that is not paired yet.
+pub fn print_pairing_needed() {
+    println!("The two devices are not paired yet. Pairing first.");
+}
+
+/// Printed on both devices after pairing succeeded.
+pub fn print_paired(device: &TrustedDevice) {
+    println!("Paired with {} (fingerprint {}).", printable(&device.name), device.fingerprint);
+}
+
+/// Prints the result of `lanshare trusted list`.
+pub fn print_trusted(devices: &[TrustedDevice]) {
+    if devices.is_empty() {
+        println!("No paired devices. Pair with `lanshare pair <device>`, or just send a file.");
+        return;
+    }
+    for device in devices {
+        let auto_accept = if device.auto_accept { "  auto-accept" } else { "" };
+        println!(
+            "{}  fingerprint {}  paired {}{auto_accept}",
+            printable(&device.name),
+            device.fingerprint,
+            utc_date(device.paired_at)
+        );
+    }
+}
+
+/// Printed after `lanshare trusted remove`.
+pub fn print_untrusted(device: &TrustedDevice) {
+    println!(
+        "Removed {} (fingerprint {}). It must pair again to exchange files.",
+        printable(&device.name),
+        device.fingerprint
+    );
+}
+
+/// Error text when `trusted remove` finds no device.
+pub fn no_trusted_device(query: &str) -> String {
+    format!("No paired device matches \"{query}\". Run `lanshare trusted list` to see them.")
+}
+
+/// Error text when several paired devices share the name `trusted remove` was given.
+pub fn ambiguous_trusted_device(query: &str) -> String {
+    format!("Several paired devices are named \"{query}\". Use the fingerprint from `lanshare trusted list` instead.")
+}
+
+/// Prints `lanshare whoami`.
+pub fn print_identity(info: &DeviceInfo) {
+    println!("Name:        {}", info.name);
+    println!("Device id:   {}", info.id);
+    println!("Fingerprint: {}", info.fingerprint);
+    println!("             {}", info.fingerprint.to_hex());
+}
+
+/// `YYYY-MM-DD` (UTC) for seconds since 1970-01-01.
+fn utc_date(seconds: u64) -> String {
+    // Days to civil date, from Howard Hinnant's `civil_from_days` (public domain), for days after 1970.
+    let days = seconds / 86_400 + 719_468;
+    let era = days / 146_097;
+    let day_of_era = days % 146_097;
+    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 { month_index + 3 } else { month_index - 9 };
+    let year = year_of_era + era * 400 + u64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
 }
 
 /// Printed when the UDP port could not be opened, so only TCP works.
@@ -101,8 +269,8 @@ pub fn print_searching(duration: Duration) {
     println!("Looking for devices for {} seconds...", duration.as_secs());
 }
 
-/// Prints the result of `lanshare devices`.
-pub fn print_devices(peers: &[Peer]) {
+/// Prints the result of `lanshare devices`. `is_paired` says which devices to mark as paired.
+pub fn print_devices(peers: &[Peer], is_paired: impl Fn(&Peer) -> bool) {
     if peers.is_empty() {
         println!(
             "No devices found. Make sure LanShare is receiving on the other device and both are on the same network."
@@ -110,19 +278,21 @@ pub fn print_devices(peers: &[Peer]) {
         return;
     }
     for peer in peers {
-        println!("{}", device_line(peer));
+        let paired = if is_paired(peer) { "  paired" } else { "" };
+        println!("{}{paired}", device_line(peer));
     }
 }
 
 /// Printed before connecting to a device found by name.
-pub fn print_connecting(peer: &Peer) {
-    println!("Connecting to {}", device_line(peer));
+pub fn print_connecting(peer: &Peer, paired: bool) {
+    let paired = if paired { "" } else { " (not paired yet)" };
+    println!("Connecting to {}{paired}", device_line(peer));
 }
 
-/// One line describing a device: name, OS and addresses.
+/// One line describing a device: name, OS, fingerprint and addresses.
 fn device_line(peer: &Peer) -> String {
     let addresses: Vec<String> = peer.connect_order().iter().map(ToString::to_string).collect();
-    format!("{}  ({})  {}", printable(&peer.name), os_name(peer.os), addresses.join(", "))
+    format!("{}  ({})  {}  {}", printable(&peer.name), os_name(peer.os), peer.fingerprint, addresses.join(", "))
 }
 
 fn os_name(os: Os) -> &'static str {
@@ -173,37 +343,30 @@ pub fn print_bench_result(result: &BenchResult, kind: TransportKind) {
     );
 }
 
-/// Printed by the receiver after a benchmark.
-pub fn print_bench_received(device_name: &str, bytes: u64) {
-    println!("Benchmark from {}: {} received and discarded", printable(device_name), DecimalBytes(bytes));
-}
-
-/// Printed after a file is sent.
-pub fn print_sent(file: &Path) {
-    println!("Sent {}", file.display());
-}
-
-/// Printed after a file is received.
-pub fn print_saved(received: &ReceivedFile) {
-    println!(
-        "Saved {} ({}) from {}",
-        received.path.display(),
-        HumanBytes(received.offer.size),
-        printable(&received.offer.device_name)
-    );
-}
-
-/// Printed after an offer is declined.
+/// Printed when an offer is declined on the terminal.
 pub fn print_declined(offer: &IncomingOffer) {
     println!("Declined {} from {}", offer.file_name, printable(&offer.device_name));
 }
 
-/// Printed when one incoming transfer fails; the receiver keeps waiting for the next one.
-pub fn print_receive_failed(error: &Error) {
-    eprintln!("Receive failed: {}", describe_error(error));
-    if matches!(error, Error::ConnectionLost) {
-        eprintln!("Anything already received was kept; the transfer continues where it stopped if the sender retries.");
-    }
+/// Printed when the answer came too late: the offer timed out or the sender left.
+pub fn print_offer_expired(offer: &IncomingOffer) {
+    println!("The offer of {} from {} is no longer waiting.", offer.file_name, printable(&offer.device_name));
+}
+
+/// Printed by the receiver when a pairing request failed.
+pub fn print_pairing_failed(error: &ErrorCode) {
+    eprintln!("Pairing failed: {}", error_text(error));
+}
+
+/// Printed by the receiver when it had to refuse an offer.
+pub fn print_receive_refused(error: &ErrorCode) {
+    eprintln!("Refused an incoming transfer: {}", error_text(error));
+}
+
+/// Printed after the files are sent.
+pub fn print_sent(files: &[PathBuf]) {
+    let names: Vec<String> = files.iter().map(|file| file.display().to_string()).collect();
+    println!("Sent {}", names.join(", "));
 }
 
 /// English text for an error code.
@@ -232,6 +395,27 @@ pub fn error_text(code: &ErrorCode) -> String {
             "Could not connect over QUIC or TCP. Check that LanShare is receiving on the other device and that a \
              firewall is not blocking port 52000."
                 .to_owned()
+        }
+        ErrorCode::UntrustedDevice => {
+            "The devices are not paired. Run `lanshare pair <device>` to pair them.".to_owned()
+        }
+        ErrorCode::FingerprintMismatch => {
+            "The other device's certificate is not the one expected. It may be a different device using the same \
+             name, or the device was reinstalled. If you trust it, remove it with `lanshare trusted remove` and pair \
+             again."
+                .to_owned()
+        }
+        ErrorCode::PairingFailed => "Pairing failed. Check the PIN and try again.".to_owned(),
+        ErrorCode::PairingLocked { retry_after_secs } => format!(
+            "Too many wrong PINs. Pairing is blocked for {} minutes; try again in {retry_after_secs} seconds.",
+            LOCK_DURATION.as_secs() / 60
+        ),
+        ErrorCode::Busy => "The other device is busy with other connections. Try again in a moment.".to_owned(),
+        ErrorCode::PermissionDenied { folder } => {
+            format!(
+                "Cannot save to {folder} on the receiving device. Choose another download folder there, with `--dir` \
+                 or in config.toml."
+            )
         }
     }
 }
@@ -270,6 +454,13 @@ mod tests {
     #[test]
     fn resuming_line_shows_both_sizes() {
         assert_eq!(resuming_line(512, 2048), "Resuming: 512 B of 2.00 KiB already received");
+    }
+
+    #[test]
+    fn dates_are_utc_calendar_days() {
+        assert_eq!(utc_date(0), "1970-01-01");
+        assert_eq!(utc_date(951_782_400), "2000-02-29");
+        assert_eq!(utc_date(1_793_145_599), "2026-10-27");
     }
 
     #[test]

@@ -22,12 +22,44 @@ pub struct Cli {
 pub enum Command {
     /// Wait for incoming files and save them. Other devices can find this one by name while it runs.
     Receive(ReceiveArgs),
-    /// Send a file to a device running `lanshare receive`.
+    /// Send files or folders to a device running `lanshare receive`.
     Send(SendArgs),
     /// List devices on the network that are running `lanshare receive`.
     Devices,
     /// Measure throughput to a device running `lanshare receive`, with generated data and no disk access.
     Bench(BenchArgs),
+    /// Pair with a device running `lanshare receive`, so the two trust each other. It shows a PIN to type here.
+    Pair(PairArgs),
+    /// List or remove paired devices.
+    #[command(subcommand)]
+    Trusted(TrustedCommand),
+    /// Show this device's name, id and certificate fingerprint.
+    Whoami,
+}
+
+/// Arguments for `lanshare pair`.
+#[derive(Debug, Args)]
+pub struct PairArgs {
+    /// Name of the device (see `lanshare devices`), or its IP address.
+    pub target: String,
+    /// Port the device listens on. Only used when the target is an IP address.
+    #[arg(long, default_value_t = DEFAULT_PORT)]
+    pub port: u16,
+    /// Transport to use. `auto` tries QUIC and falls back to TCP.
+    #[arg(long, value_enum, default_value_t = TransportArg::Auto)]
+    pub transport: TransportArg,
+}
+
+/// `lanshare trusted` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum TrustedCommand {
+    /// List paired devices.
+    List,
+    /// Forget a paired device. Sending to or from it needs pairing again.
+    Remove {
+        /// The device's name, id, or fingerprint (as shown by `lanshare trusted list`).
+        device: String,
+    },
 }
 
 /// Arguments for `lanshare receive`.
@@ -49,8 +81,9 @@ pub struct ReceiveArgs {
 pub struct SendArgs {
     /// Name of the receiving device (see `lanshare devices`), or its IP address.
     pub target: String,
-    /// File to send.
-    pub file: PathBuf,
+    /// Files and folders to send, in one transfer. Folders are sent with everything inside them.
+    #[arg(required = true)]
+    pub files: Vec<PathBuf>,
     /// Port the receiver listens on. Only used when the target is an IP address.
     #[arg(long, default_value_t = DEFAULT_PORT)]
     pub port: u16,

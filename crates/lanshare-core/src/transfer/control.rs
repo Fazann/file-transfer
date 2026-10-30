@@ -1,4 +1,4 @@
-//! Controlling a running transfer: pause, resume and bandwidth limit, plus the shared pieces both sides use to keep
+//! Controlling a running transfer: pause, resume, cancel and bandwidth limit, plus the shared pieces both sides use to keep
 //! the peer informed and to notice a dead connection.
 
 use std::{
@@ -23,13 +23,14 @@ use crate::{
     transport::SendHalf,
 };
 
-/// Handle to pause, resume and throttle a transfer from outside, for example from the UI.
+/// Handle to pause, resume, cancel and throttle a transfer from outside, for example from the UI.
 ///
 /// Clones control the same transfer. One handle may be used across reconnects: a transfer paused before a
 /// connection dropped stays paused on the next one.
 #[derive(Debug, Clone)]
 pub struct TransferControl {
     paused: watch::Sender<bool>,
+    cancelled: watch::Sender<bool>,
     rate_limit: RateLimit,
 }
 
@@ -43,7 +44,30 @@ impl TransferControl {
     /// A running (not paused) transfer limited to `bandwidth_limit_mbps` MB/s; `0` means unlimited.
     #[must_use]
     pub fn new(bandwidth_limit_mbps: u32) -> Self {
-        Self { paused: watch::Sender::new(false), rate_limit: RateLimit::new(bandwidth_limit_mbps) }
+        Self {
+            paused: watch::Sender::new(false),
+            cancelled: watch::Sender::new(false),
+            rate_limit: RateLimit::new(bandwidth_limit_mbps),
+        }
+    }
+
+    /// Cancels the transfer: it stops with [`Error::Cancelled`] and the other device is told, so it does not wait
+    /// for a reconnect. A partly received file is kept, so offering it again later still resumes.
+    pub fn cancel(&self) {
+        self.cancelled.send_replace(true);
+    }
+
+    /// Whether [`TransferControl::cancel`] was called.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        *self.cancelled.borrow()
+    }
+
+    /// Completes once the transfer is cancelled.
+    pub(crate) async fn cancelled(&self) {
+        let mut cancelled = self.cancelled.subscribe();
+        // Fails only if the sender is dropped, which cannot happen while `self` holds it.
+        let _ = cancelled.wait_for(|cancelled| *cancelled).await;
     }
 
     /// Pauses: the sender stops starting new chunks, and the other device is told.

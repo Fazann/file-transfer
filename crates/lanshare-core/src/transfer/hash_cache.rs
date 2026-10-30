@@ -51,6 +51,11 @@ impl HashCache {
             .unwrap_or_else(|_| Self { path: None, entry: empty_entry(transfer_id, &layout), unsaved: 0 })
     }
 
+    /// A cache that is never saved, for entries too small to be worth it (a single chunk is cheap to hash again).
+    pub(crate) fn in_memory(transfer_id: Uuid, layout: &ChunkLayout) -> Self {
+        Self { path: None, entry: empty_entry(transfer_id, layout), unsaved: 0 }
+    }
+
     fn open_blocking(dir: &Path, transfer_id: Uuid, layout: &ChunkLayout) -> Self {
         if let Err(error) = fs::create_dir_all(dir) {
             warn!(dir = %dir.display(), %error, "hash cache unavailable, keeping hashes in memory");

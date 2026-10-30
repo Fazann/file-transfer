@@ -5,12 +5,21 @@
     "acked",
     "acks",
     "ALPN",
+    "Avahi",
     "BBR",
     "blake",
+    "dalek",
     "Deque",
+    "Ed25519",
+    "EXPORTER",
     "fdatasync",
     "FULLFSYNC",
+    "Hinnant",
+    "impostor",
+    "keyed",
     "lanshare",
+    "libfuzzer",
+    "lookalike",
     "mdns",
     "nack",
     "nacked",
@@ -22,9 +31,19 @@
     "Resends",
     "rfind",
     "rustls",
+    "SPAKE",
+    "spake",
+    "SubjectPublicKeyInfo",
     "subsec",
+    "ticketer",
     "uni",
+    "unpaired",
+    "Unpaired",
+    "webpki",
     "xorshift"
   ],
-  "ignorePaths": ["target", "Cargo.lock"]
+  "ignorePaths": [
+    "target",
+    "Cargo.lock"
+  ]
 }

@@ -1,0 +1,170 @@
+{
+  "app": {
+    "name": "LanShare"
+  },
+  "nav": {
+    "devices": "Devices",
+    "transfers": "Transfers",
+    "history": "History",
+    "settings": "Settings",
+    "collapse": "Collapse sidebar",
+    "expand": "Expand sidebar"
+  },
+  "devices": {
+    "title": "Devices",
+    "this_device": "This device",
+    "fingerprint": "Fingerprint",
+    "empty_title": "Looking for devices…",
+    "empty_description": "Open LanShare on another computer on the same network.",
+    "send_files": "Send files…",
+    "pair": "Pair",
+    "paired": "Paired",
+    "not_paired": "Not paired",
+    "drop_here": "Drop to send",
+    "drop_hint": "Drop files on a device to send them.",
+    "pick_title": "Choose files to send",
+    "os": {
+      "windows": "Windows",
+      "macos": "macOS",
+      "linux": "Linux"
+    },
+    "send_folder": "Send folder…",
+    "pick_folder_title": "Choose a folder to send"
+  },
+  "transfers": {
+    "title": "Transfers",
+    "empty_title": "No transfers",
+    "empty_description": "Files you send or receive appear here.",
+    "sending_to": "To {device}",
+    "receiving_from": "From {device}",
+    "pause": "Pause",
+    "resume": "Resume",
+    "cancel": "Cancel",
+    "open_folder": "Show in folder",
+    "clear_finished": "Clear finished",
+    "time_left": "{time} left",
+    "progress": "{done} of {total}",
+    "status": {
+      "active": "In progress",
+      "paused": "Paused",
+      "waiting": "Waiting for the other device…",
+      "completed": "Done",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "files": "{count, plural, one {# file} other {# files}}"
+  },
+  "history": {
+    "title": "History",
+    "empty_title": "No history yet",
+    "empty_description": "Finished transfers are listed here.",
+    "clear": "Clear history",
+    "open_folder": "Show in folder",
+    "sent_to": "Sent to {device}",
+    "received_from": "Received from {device}",
+    "status": {
+      "completed": "Done",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "general": "General",
+    "network": "Network",
+    "language": "Language",
+    "language_system": "Same as the system",
+    "device_name": "Device name",
+    "download_folder": "Download folder",
+    "choose_folder": "Choose…",
+    "choose_folder_title": "Choose where to save received files",
+    "port": "Port",
+    "streams": "Parallel streams",
+    "streams_hint": "1 to 16. More can help on fast networks.",
+    "bandwidth_limit": "Upload limit (MB/s)",
+    "bandwidth_hint": "0 means no limit.",
+    "allow_untrusted": "Allow devices that are not paired",
+    "allow_untrusted_hint": "They can offer files, and you still decide. Traffic is encrypted either way.",
+    "close_to_tray": "Keep receiving in the tray when the window is closed",
+    "start_at_login": "Start LanShare when I log in",
+    "save": "Save",
+    "saved": "Settings saved",
+    "restart_note": "Changing the name, port or download folder restarts receiving and stops running transfers.",
+    "trusted_devices": "Paired devices",
+    "trusted_empty": "No paired devices yet.",
+    "auto_accept": "Accept files without asking",
+    "remove": "Remove",
+    "paired_on": "Paired {date}",
+    "diagnostics": "Diagnostics",
+    "export_diagnostics": "Export diagnostics…",
+    "export_diagnostics_hint": "Saves logs and settings to a zip file you can share when reporting a problem. Your device key and paired devices are never included.",
+    "export_diagnostics_title": "Save diagnostics",
+    "diagnostics_saved": "Diagnostics saved"
+  },
+  "offer": {
+    "title": "Incoming file",
+    "from": "{device} wants to send you a file.",
+    "not_paired": "This device is not paired. Only accept files you expect.",
+    "accept": "Accept",
+    "decline": "Decline"
+  },
+  "pairing": {
+    "title": "Pair devices",
+    "show_pin": "{device} wants to pair with this device. Type this PIN on that device:",
+    "enter_pin": "Enter the PIN shown on {device}.",
+    "pin_label": "PIN",
+    "pair": "Pair",
+    "waiting": "Waiting for {device}…",
+    "success": "Paired with {device}"
+  },
+  "update": {
+    "title": "Update available",
+    "body": "LanShare {version} is ready to install. You have version {current}.",
+    "install": "Install and restart",
+    "later": "Later",
+    "installing": "Installing the update…",
+    "failed": "The update could not be installed. Try again later."
+  },
+  "notifications": {
+    "offer_title": "Incoming file",
+    "offer_body": "{device} wants to send {file} ({size}).",
+    "pairing_title": "Pairing request",
+    "pairing_body": "{device} wants to pair. Open LanShare to see the PIN.",
+    "receive_refused_title": "Couldn't receive a transfer"
+  },
+  "tray": {
+    "open": "Open LanShare",
+    "pause_all": "Pause all",
+    "quit": "Quit"
+  },
+  "common": {
+    "close": "Close",
+    "cancel": "Cancel",
+    "dismiss": "Dismiss"
+  },
+  "languages": {
+    "en": "English",
+    "km": "ខ្មែរ",
+    "ar": "العربية"
+  },
+  "errors": {
+    "DECLINED": "{device} declined the transfer.",
+    "VERSION_MISMATCH": "{device} is using a different version of LanShare. Update both devices.",
+    "INVALID_FILE_NAME": "The file name is not allowed.",
+    "IO": "A file or network operation failed.",
+    "PROTOCOL_VIOLATION": "The other device sent unexpected data.",
+    "CONNECTION_LOST": "The connection was lost. Send again to continue where it stopped.",
+    "CANCELLED": "The transfer was cancelled.",
+    "PEER_UNREACHABLE": "Couldn't reach {device}. Make sure both devices are on the same network and LanShare is open.",
+    "HASH_MISMATCH": "The received data was damaged. Send again to retry.",
+    "INSUFFICIENT_SPACE": "Not enough space. Need {needed}, only {available} free.",
+    "TRANSPORT_UNAVAILABLE": "The connection was blocked. Check your firewall settings.",
+    "UNTRUSTED_DEVICE": "The devices are not paired. Pair them first.",
+    "FINGERPRINT_MISMATCH": "This device is not the one you paired with. Remove it and pair again if you trust it.",
+    "PAIRING_FAILED": "Pairing failed. Check the PIN and try again.",
+    "PAIRING_LOCKED": "Too many wrong PINs. Try again in {seconds} seconds.",
+    "BUSY": "{device} is busy. Try again in a moment.",
+    "PERMISSION_DENIED": "Can't save to {folder}. Choose another download folder in Settings.",
+    "macos_local_network": "On macOS, also check that LanShare is allowed under System Settings → Privacy & Security → Local Network."
+  }
+}

@@ -1,4 +1,5 @@
 docs/*
+temp/*
 
 # Rust build output (Cargo.lock is kept: this repo ships binaries)
 /target

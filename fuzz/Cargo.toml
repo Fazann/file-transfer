@@ -1,0 +1,24 @@
+[package]
+name = "lanshare-fuzz"
+description = "cargo-fuzz targets for LanShare. Not a workspace member; run with `cargo +nightly fuzz run <target>`."
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+lanshare-core = { path = "../crates/lanshare-core" }
+libfuzzer-sys = "0.4"
+tokio = { version = "1", features = ["rt"] }
+
+[[bin]]
+name = "read_message"
+path = "fuzz_targets/read_message.rs"
+test = false
+doc = false
+bench = false
+
+# Keep this crate out of the main workspace, so `cargo test --workspace` never builds it.
+[workspace]

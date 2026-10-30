@@ -8,6 +8,7 @@ mod bench;
 mod chunk;
 mod control;
 mod hash_cache;
+mod manifest;
 mod path;
 mod progress;
 mod rate_limit;
@@ -31,15 +32,17 @@ pub use bench::{run_bench, BenchResult};
 pub use chunk::{
     chunk_count, hash_chunk, root_hash, ChunkHash, ChunkLayout, DEFAULT_CHUNK_SIZE, MAX_CHUNK_COUNT, MAX_CHUNK_SIZE,
 };
+pub(crate) use control::ControlWriter;
 pub use control::TransferControl;
 pub use hash_cache::HASH_CACHE_MAX_AGE;
-pub use path::sanitize_file_name;
+pub use manifest::{list_entries, MAX_ENTRIES};
+pub use path::{sanitize_file_name, sanitize_relative_path, RelativePath};
 pub use progress::{progress_channel, Progress};
 pub use rate_limit::RateLimit;
-pub use receiver::{receive_file, IncomingOffer, OfferDecider, ReceiveOutcome, ReceivedFile};
+pub use receiver::{receive_file, IncomingOffer, OfferDecider, ReceiveOutcome, ReceivePolicy, ReceivedFile};
 pub use retry::RETRY_WINDOW;
 pub use scheduler::{DEFAULT_STREAMS, MAX_STREAMS};
-pub use sender::{send_file, SendOptions};
+pub use sender::{send_file, send_files, SendOptions};
 pub use state::{cleanup_stale_parts, PART_SUFFIX, STATE_SUFFIX};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},

@@ -17,7 +17,7 @@ use tracing::{debug, warn};
 use super::{peers::Peer, PeerSink, SERVICE_TYPE};
 use crate::{
     error::{Error, Result},
-    identity::{DeviceId, DeviceInfo, Os},
+    identity::{DeviceId, DeviceInfo, Fingerprint, Os},
 };
 
 /// How often to replay the cache and verify known peers.
@@ -77,6 +77,7 @@ fn register(daemon: &ServiceDaemon, info: &DeviceInfo) -> Result<String> {
         ("name", info.name.clone()),
         ("v", info.protocol_version.to_string()),
         ("os", info.os.as_str().to_owned()),
+        ("fp", info.fingerprint.to_hex()),
     ];
     // `()` means "no fixed addresses"; `enable_addr_auto` keeps them in sync with the network interfaces.
     let service = ServiceInfo::new(SERVICE_TYPE, &instance, &host, (), info.port, &properties[..])
@@ -144,7 +145,7 @@ fn handle_event(event: ServiceEvent, known: &mut HashMap<String, DeviceId>, sink
     }
 }
 
-/// Builds a peer from TXT records (`id`, `name`, `v`, `os`). Returns `None` if any is missing or invalid.
+/// Builds a peer from TXT records (`id`, `name`, `v`, `os`, `fp`). Returns `None` if any is missing or invalid.
 fn peer_from_txt<'a>(property: impl Fn(&str) -> Option<&'a str>, addresses: Vec<IpAddr>, port: u16) -> Option<Peer> {
     Some(Peer {
         id: DeviceId::parse(property("id")?)?,
@@ -153,6 +154,7 @@ fn peer_from_txt<'a>(property: impl Fn(&str) -> Option<&'a str>, addresses: Vec<
         addresses,
         port,
         protocol_version: property("v")?.parse().ok()?,
+        fingerprint: Fingerprint::parse_hex(property("fp")?)?,
         last_seen: Instant::now(),
     })
 }
@@ -171,11 +173,21 @@ mod tests {
     fn txt_records_become_a_peer() {
         let id = DeviceId::new_random();
         let id_text = id.to_string();
-        let txt: HashMap<&str, &str> = [("id", id_text.as_str()), ("name", "Desk"), ("v", "2"), ("os", "macos")].into();
+        let fingerprint = Fingerprint::from_bytes([5; 32]);
+        let fingerprint_text = fingerprint.to_hex();
+        let txt: HashMap<&str, &str> = [
+            ("id", id_text.as_str()),
+            ("name", "Desk"),
+            ("v", "2"),
+            ("os", "macos"),
+            ("fp", fingerprint_text.as_str()),
+        ]
+        .into();
         let address = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 9));
         let peer = peer_from_txt(|key| txt.get(key).copied(), vec![address], 52000).unwrap();
         assert_eq!((peer.id, peer.name.as_str(), peer.os, peer.protocol_version), (id, "Desk", Os::MacOs, 2));
         assert_eq!(peer.addresses, vec![address]);
+        assert_eq!(peer.fingerprint, fingerprint);
     }
 
     #[test]
@@ -184,5 +196,9 @@ mod tests {
         assert!(peer_from_txt(|key| txt.get(key).copied(), vec![], 52000).is_none());
         let txt: HashMap<&str, &str> = [("name", "Desk")].into();
         assert!(peer_from_txt(|key| txt.get(key).copied(), vec![], 52000).is_none());
+        let id_text = DeviceId::new_random().to_string();
+        let without_fingerprint: HashMap<&str, &str> =
+            [("id", id_text.as_str()), ("name", "Desk"), ("v", "2"), ("os", "macos")].into();
+        assert!(peer_from_txt(|key| without_fingerprint.get(key).copied(), vec![], 52000).is_none());
     }
 }

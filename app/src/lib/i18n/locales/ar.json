@@ -1,0 +1,170 @@
+{
+  "app": {
+    "name": "LanShare"
+  },
+  "nav": {
+    "devices": "الأجهزة",
+    "transfers": "عمليات النقل",
+    "history": "السجل",
+    "settings": "الإعدادات",
+    "collapse": "طي الشريط الجانبي",
+    "expand": "توسيع الشريط الجانبي"
+  },
+  "devices": {
+    "title": "الأجهزة",
+    "this_device": "هذا الجهاز",
+    "fingerprint": "البصمة",
+    "empty_title": "جارٍ البحث عن أجهزة…",
+    "empty_description": "افتح LanShare على حاسوب آخر في الشبكة نفسها.",
+    "send_files": "إرسال ملفات…",
+    "pair": "إقران",
+    "paired": "مقترن",
+    "not_paired": "غير مقترن",
+    "drop_here": "أفلت للإرسال",
+    "drop_hint": "أفلت الملفات على جهاز لإرسالها.",
+    "pick_title": "اختر الملفات المراد إرسالها",
+    "os": {
+      "windows": "Windows",
+      "macos": "macOS",
+      "linux": "Linux"
+    },
+    "send_folder": "إرسال مجلد…",
+    "pick_folder_title": "اختر مجلدًا لإرساله"
+  },
+  "transfers": {
+    "title": "عمليات النقل",
+    "empty_title": "لا توجد عمليات نقل",
+    "empty_description": "تظهر هنا الملفات التي ترسلها أو تستقبلها.",
+    "sending_to": "إلى {device}",
+    "receiving_from": "من {device}",
+    "pause": "إيقاف مؤقت",
+    "resume": "استئناف",
+    "cancel": "إلغاء",
+    "open_folder": "عرض في المجلد",
+    "clear_finished": "مسح المكتملة",
+    "time_left": "متبقٍ {time}",
+    "progress": "{done} من {total}",
+    "status": {
+      "active": "قيد التنفيذ",
+      "paused": "متوقف مؤقتًا",
+      "waiting": "بانتظار الجهاز الآخر…",
+      "completed": "اكتمل",
+      "failed": "فشل",
+      "cancelled": "أُلغي"
+    },
+    "files": "{count, plural, zero {لا ملفات} one {ملف واحد} two {ملفان} few {# ملفات} many {# ملفًا} other {# ملف}}"
+  },
+  "history": {
+    "title": "السجل",
+    "empty_title": "لا يوجد سجل بعد",
+    "empty_description": "تُعرض هنا عمليات النقل المنتهية.",
+    "clear": "مسح السجل",
+    "open_folder": "عرض في المجلد",
+    "sent_to": "أُرسل إلى {device}",
+    "received_from": "استُقبل من {device}",
+    "status": {
+      "completed": "اكتمل",
+      "failed": "فشل",
+      "cancelled": "أُلغي"
+    }
+  },
+  "settings": {
+    "title": "الإعدادات",
+    "general": "عام",
+    "network": "الشبكة",
+    "language": "اللغة",
+    "language_system": "مثل النظام",
+    "device_name": "اسم الجهاز",
+    "download_folder": "مجلد التنزيل",
+    "choose_folder": "اختيار…",
+    "choose_folder_title": "اختر مكان حفظ الملفات المستلمة",
+    "port": "المنفذ",
+    "streams": "التدفقات المتوازية",
+    "streams_hint": "من 1 إلى 16. قد يساعد العدد الأكبر على الشبكات السريعة.",
+    "bandwidth_limit": "حد الرفع (ميغابايت/ث)",
+    "bandwidth_hint": "0 يعني بلا حد.",
+    "allow_untrusted": "السماح للأجهزة غير المقترنة",
+    "allow_untrusted_hint": "يمكنها عرض ملفات، ويبقى القرار لك. الاتصال مشفّر في كل الأحوال.",
+    "close_to_tray": "متابعة الاستقبال في شريط النظام عند إغلاق النافذة",
+    "start_at_login": "تشغيل LanShare عند تسجيل الدخول",
+    "save": "حفظ",
+    "saved": "حُفظت الإعدادات",
+    "restart_note": "تغيير الاسم أو المنفذ أو مجلد التنزيل يعيد تشغيل الاستقبال ويوقف عمليات النقل الجارية.",
+    "trusted_devices": "الأجهزة المقترنة",
+    "trusted_empty": "لا توجد أجهزة مقترنة بعد.",
+    "auto_accept": "قبول الملفات دون سؤال",
+    "remove": "إزالة",
+    "paired_on": "اقترن في {date}",
+    "diagnostics": "التشخيص",
+    "export_diagnostics": "تصدير بيانات التشخيص…",
+    "export_diagnostics_hint": "يحفظ السجلات والإعدادات في ملف zip يمكنك مشاركته عند الإبلاغ عن مشكلة. لا يتضمن أبدًا مفتاح جهازك أو الأجهزة المقترنة.",
+    "export_diagnostics_title": "حفظ بيانات التشخيص",
+    "diagnostics_saved": "حُفظت بيانات التشخيص"
+  },
+  "offer": {
+    "title": "ملف وارد",
+    "from": "يريد {device} أن يرسل إليك ملفًا.",
+    "not_paired": "هذا الجهاز غير مقترن. لا تقبل إلا الملفات التي تتوقعها.",
+    "accept": "قبول",
+    "decline": "رفض"
+  },
+  "pairing": {
+    "title": "إقران الأجهزة",
+    "show_pin": "يريد {device} الاقتران بهذا الجهاز. اكتب رمز PIN هذا على ذلك الجهاز:",
+    "enter_pin": "أدخل رمز PIN الظاهر على {device}.",
+    "pin_label": "رمز PIN",
+    "pair": "إقران",
+    "waiting": "بانتظار {device}…",
+    "success": "تم الاقتران مع {device}"
+  },
+  "update": {
+    "title": "يتوفر تحديث",
+    "body": "LanShare {version} جاهز للتثبيت. لديك الإصدار {current}.",
+    "install": "التثبيت وإعادة التشغيل",
+    "later": "لاحقًا",
+    "installing": "جارٍ تثبيت التحديث…",
+    "failed": "تعذّر تثبيت التحديث. حاول مرة أخرى لاحقًا."
+  },
+  "notifications": {
+    "offer_title": "ملف وارد",
+    "offer_body": "يريد {device} إرسال {file} ‏({size}).",
+    "pairing_title": "طلب اقتران",
+    "pairing_body": "يريد {device} الاقتران. افتح LanShare لرؤية رمز PIN.",
+    "receive_refused_title": "تعذّر استلام عملية نقل"
+  },
+  "tray": {
+    "open": "فتح LanShare",
+    "pause_all": "إيقاف الكل مؤقتًا",
+    "quit": "إنهاء"
+  },
+  "common": {
+    "close": "إغلاق",
+    "cancel": "إلغاء",
+    "dismiss": "تجاهل"
+  },
+  "languages": {
+    "en": "English",
+    "km": "ខ្មែរ",
+    "ar": "العربية"
+  },
+  "errors": {
+    "DECLINED": "رفض {device} عملية النقل.",
+    "VERSION_MISMATCH": "يستخدم {device} إصدارًا مختلفًا من LanShare. حدّث الجهازين.",
+    "INVALID_FILE_NAME": "اسم الملف غير مسموح به.",
+    "IO": "فشلت عملية على ملف أو على الشبكة.",
+    "PROTOCOL_VIOLATION": "أرسل الجهاز الآخر بيانات غير متوقعة.",
+    "CONNECTION_LOST": "انقطع الاتصال. أرسل مجددًا للمتابعة من حيث توقف.",
+    "CANCELLED": "أُلغيت عملية النقل.",
+    "PEER_UNREACHABLE": "تعذّر الوصول إلى {device}. تأكد من أن الجهازين على الشبكة نفسها وأن LanShare مفتوح.",
+    "HASH_MISMATCH": "البيانات المستلمة تالفة. أرسل مجددًا لإعادة المحاولة.",
+    "INSUFFICIENT_SPACE": "المساحة غير كافية. المطلوب {needed}، والمتاح {available} فقط.",
+    "TRANSPORT_UNAVAILABLE": "تم حظر الاتصال. تحقق من إعدادات جدار الحماية.",
+    "UNTRUSTED_DEVICE": "الجهازان غير مقترنين. اقرنهما أولًا.",
+    "FINGERPRINT_MISMATCH": "هذا ليس الجهاز الذي اقترنت به. أزله واقترن به مجددًا إن كنت تثق به.",
+    "PAIRING_FAILED": "فشل الاقتران. تحقق من رمز PIN وحاول مجددًا.",
+    "PAIRING_LOCKED": "رموز PIN خاطئة كثيرة. حاول مجددًا بعد {seconds} ثانية.",
+    "BUSY": "{device} مشغول. حاول مجددًا بعد قليل.",
+    "PERMISSION_DENIED": "تعذّر الحفظ في {folder}. اختر مجلد تنزيل آخر من الإعدادات.",
+    "macos_local_network": "على macOS، تأكد أيضًا من السماح لـ LanShare في System Settings → Privacy & Security → Local Network."
+  }
+}

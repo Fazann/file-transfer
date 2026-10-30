@@ -43,11 +43,17 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// What the receiver knows about one partly received file.
+/// What the receiver knows about one partly received file of a transfer.
+///
+/// Once the file is complete and renamed, the state stays (with `saved_as` set) until the whole transfer is done,
+/// so a reconnect knows the file arrived and does not save it twice.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ResumeState {
     /// Id from the sender's offer.
     pub transfer_id: Uuid,
+    /// Index of the entry in the offer.
+    #[serde(default)]
+    pub entry: u32,
     /// File size in bytes.
     pub size: u64,
     /// Chunk size from the offer.
@@ -55,18 +61,23 @@ pub(crate) struct ResumeState {
     /// Hash of every chunk that is written and synced, `None` for the rest.
     #[serde(with = "hex_hashes")]
     pub chunks: Vec<Option<ChunkHash>>,
+    /// Where the finished file was saved; `None` while it is still a part file.
+    #[serde(default)]
+    pub saved_as: Option<PathBuf>,
 }
 
 impl ResumeState {
     /// A state with no chunks received yet.
-    pub(crate) fn new(transfer_id: Uuid, layout: &ChunkLayout) -> Self {
+    pub(crate) fn new(transfer_id: Uuid, entry: u32, layout: &ChunkLayout) -> Self {
         let count = usize::try_from(layout.count()).unwrap_or(0);
-        Self { transfer_id, size: layout.size(), chunk_size: layout.chunk_size(), chunks: vec![None; count] }
+        let (size, chunk_size) = (layout.size(), layout.chunk_size());
+        Self { transfer_id, entry, size, chunk_size, chunks: vec![None; count], saved_as: None }
     }
 
-    /// Whether this state belongs to the offered transfer.
-    pub(crate) fn matches(&self, transfer_id: Uuid, layout: &ChunkLayout) -> bool {
+    /// Whether this state belongs to entry `entry` of the offered transfer.
+    pub(crate) fn matches(&self, transfer_id: Uuid, entry: u32, layout: &ChunkLayout) -> bool {
         self.transfer_id == transfer_id
+            && self.entry == entry
             && self.size == layout.size()
             && self.chunk_size == layout.chunk_size()
             && self.chunks.len() as u64 == layout.count()
@@ -192,15 +203,16 @@ mod tests {
     fn save_and_load_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.bin.lanshare-state");
-        let mut state = ResumeState::new(Uuid::new_v4(), &layout());
+        let mut state = ResumeState::new(Uuid::new_v4(), 0, &layout());
         state.mark(1, hash_chunk(b"second"));
         state.save(&path).unwrap();
 
         let loaded = ResumeState::load(&path).unwrap().unwrap();
         assert_eq!(loaded, state);
-        assert!(loaded.matches(state.transfer_id, &layout()));
-        assert!(!loaded.matches(Uuid::new_v4(), &layout()));
-        assert!(!loaded.matches(state.transfer_id, &ChunkLayout::new(21, 8).unwrap()));
+        assert!(loaded.matches(state.transfer_id, 0, &layout()));
+        assert!(!loaded.matches(state.transfer_id, 1, &layout()), "another entry of the same transfer");
+        assert!(!loaded.matches(Uuid::new_v4(), 0, &layout()));
+        assert!(!loaded.matches(state.transfer_id, 0, &ChunkLayout::new(21, 8).unwrap()));
     }
 
     #[test]
@@ -214,7 +226,7 @@ mod tests {
 
     #[test]
     fn progress_and_bitset_follow_marked_chunks() {
-        let mut state = ResumeState::new(Uuid::new_v4(), &layout());
+        let mut state = ResumeState::new(Uuid::new_v4(), 0, &layout());
         state.mark(2, hash_chunk(b"last"));
         assert_eq!(state.have_bitset(), vec![0b100]);
         assert_eq!(state.received_bytes(&layout()), 4);
@@ -224,7 +236,7 @@ mod tests {
     #[test]
     fn root_hash_is_independent_of_arrival_order() {
         let hashes: Vec<ChunkHash> = [b"a".as_slice(), b"b", b"c"].iter().map(|data| hash_chunk(data)).collect();
-        let mut state = ResumeState::new(Uuid::new_v4(), &layout());
+        let mut state = ResumeState::new(Uuid::new_v4(), 0, &layout());
         for index in [2, 0, 1] {
             state.mark(index as u64, hashes[index]);
         }

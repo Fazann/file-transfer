@@ -49,7 +49,46 @@ pub enum ErrorCode {
     },
     /// Neither QUIC nor TCP could connect to the address.
     TransportUnavailable,
+    /// The other device is not in the trust store, so the connection was refused. Pairing fixes it.
+    UntrustedDevice,
+    /// The certificate presented over TLS does not belong to the device that was expected.
+    FingerprintMismatch,
+    /// Pairing did not complete, usually because the PIN was wrong.
+    PairingFailed,
+    /// Too many failed pairing attempts; pairing is refused for a while.
+    PairingLocked {
+        /// Seconds until pairing is allowed again.
+        retry_after_secs: u64,
+    },
+    /// The receiver is already handling as many connections as it allows.
+    Busy,
+    /// The operating system refused a write to the download folder.
+    PermissionDenied {
+        /// The folder that could not be written to, on the receiving device.
+        folder: String,
+    },
 }
+
+/// The name of every [`ErrorCode`], in wire order. Frontends check that each one has a translation.
+pub const ERROR_CODE_NAMES: [&str; 17] = [
+    "DECLINED",
+    "VERSION_MISMATCH",
+    "INVALID_FILE_NAME",
+    "IO",
+    "PROTOCOL_VIOLATION",
+    "CONNECTION_LOST",
+    "CANCELLED",
+    "PEER_UNREACHABLE",
+    "HASH_MISMATCH",
+    "INSUFFICIENT_SPACE",
+    "TRANSPORT_UNAVAILABLE",
+    "UNTRUSTED_DEVICE",
+    "FINGERPRINT_MISMATCH",
+    "PAIRING_FAILED",
+    "PAIRING_LOCKED",
+    "BUSY",
+    "PERMISSION_DENIED",
+];
 
 impl ErrorCode {
     /// Fixed `SCREAMING_SNAKE_CASE` name of the code, e.g. `"VERSION_MISMATCH"`.
@@ -69,6 +108,12 @@ impl ErrorCode {
             Self::HashMismatch => "HASH_MISMATCH",
             Self::InsufficientSpace { .. } => "INSUFFICIENT_SPACE",
             Self::TransportUnavailable => "TRANSPORT_UNAVAILABLE",
+            Self::UntrustedDevice => "UNTRUSTED_DEVICE",
+            Self::FingerprintMismatch => "FINGERPRINT_MISMATCH",
+            Self::PairingFailed => "PAIRING_FAILED",
+            Self::PairingLocked { .. } => "PAIRING_LOCKED",
+            Self::Busy => "BUSY",
+            Self::PermissionDenied { .. } => "PERMISSION_DENIED",
         }
     }
 }
@@ -125,6 +170,30 @@ pub enum Error {
     /// Neither QUIC nor TCP could connect to the address.
     #[error("TRANSPORT_UNAVAILABLE")]
     TransportUnavailable,
+    /// The other device is not trusted.
+    #[error("UNTRUSTED_DEVICE")]
+    UntrustedDevice,
+    /// The TLS certificate does not belong to the expected device.
+    #[error("FINGERPRINT_MISMATCH")]
+    FingerprintMismatch,
+    /// Pairing did not complete.
+    #[error("PAIRING_FAILED")]
+    PairingFailed,
+    /// Pairing is locked after too many failures.
+    #[error("PAIRING_LOCKED (retry after {retry_after_secs} s)")]
+    PairingLocked {
+        /// Seconds until pairing is allowed again.
+        retry_after_secs: u64,
+    },
+    /// The receiver has no room for another connection.
+    #[error("BUSY")]
+    Busy,
+    /// The operating system refused a write to the download folder.
+    #[error("PERMISSION_DENIED ({folder})")]
+    PermissionDenied {
+        /// The folder that could not be written to.
+        folder: String,
+    },
     /// The peer reported an error that has no more specific local variant.
     #[error("PEER: {}", code.name())]
     Peer {
@@ -151,6 +220,14 @@ impl Error {
                 ErrorCode::InsufficientSpace { needed: *needed, available: *available }
             }
             Self::TransportUnavailable => ErrorCode::TransportUnavailable,
+            Self::UntrustedDevice => ErrorCode::UntrustedDevice,
+            Self::FingerprintMismatch => ErrorCode::FingerprintMismatch,
+            Self::PairingFailed => ErrorCode::PairingFailed,
+            Self::PairingLocked { retry_after_secs } => {
+                ErrorCode::PairingLocked { retry_after_secs: *retry_after_secs }
+            }
+            Self::Busy => ErrorCode::Busy,
+            Self::PermissionDenied { folder } => ErrorCode::PermissionDenied { folder: folder.clone() },
             Self::Peer { code } => code.clone(),
         }
     }
@@ -164,6 +241,12 @@ impl Error {
             ErrorCode::VersionMismatch { ours, theirs } => Self::VersionMismatch { ours: theirs, theirs: ours },
             ErrorCode::HashMismatch => Self::HashMismatch,
             ErrorCode::InsufficientSpace { needed, available } => Self::InsufficientSpace { needed, available },
+            ErrorCode::UntrustedDevice => Self::UntrustedDevice,
+            ErrorCode::FingerprintMismatch => Self::FingerprintMismatch,
+            ErrorCode::PairingFailed => Self::PairingFailed,
+            ErrorCode::PairingLocked { retry_after_secs } => Self::PairingLocked { retry_after_secs },
+            ErrorCode::Busy => Self::Busy,
+            ErrorCode::PermissionDenied { folder } => Self::PermissionDenied { folder },
             code => Self::Peer { code },
         }
     }
@@ -196,7 +279,7 @@ impl From<io::Error> for Error {
 mod tests {
     use super::*;
 
-    const ALL_CODES: [ErrorCode; 11] = [
+    const ALL_CODES: [ErrorCode; 17] = [
         ErrorCode::Declined,
         ErrorCode::VersionMismatch { ours: 1, theirs: 2 },
         ErrorCode::InvalidFileName,
@@ -208,7 +291,19 @@ mod tests {
         ErrorCode::HashMismatch,
         ErrorCode::InsufficientSpace { needed: 2, available: 1 },
         ErrorCode::TransportUnavailable,
+        ErrorCode::UntrustedDevice,
+        ErrorCode::FingerprintMismatch,
+        ErrorCode::PairingFailed,
+        ErrorCode::PairingLocked { retry_after_secs: 300 },
+        ErrorCode::Busy,
+        ErrorCode::PermissionDenied { folder: String::new() },
     ];
+
+    #[test]
+    fn name_list_matches_every_code_in_order() {
+        let names: Vec<&str> = ALL_CODES.iter().map(ErrorCode::name).collect();
+        assert_eq!(names, ERROR_CODE_NAMES);
+    }
 
     #[test]
     fn names_are_unique_screaming_snake_case() {

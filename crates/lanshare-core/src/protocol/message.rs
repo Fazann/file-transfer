@@ -115,4 +115,21 @@ pub enum Message {
         /// Bytes the sender will send.
         size: u64,
     },
+    /// Sent instead of `Offer` on a pairing connection. The receiver answers with its own `Hello` and shows a PIN.
+    PairRequest,
+    /// One SPAKE2 message, sent once by each side.
+    PairMessage {
+        /// The SPAKE2 message bytes.
+        data: Vec<u8>,
+    },
+    /// Proof that the sender of this message derived the same key, so it typed or showed the same PIN.
+    PairConfirm {
+        /// Keyed BLAKE3 of the role and both fingerprints, keyed by the SPAKE2 result.
+        mac: [u8; 32],
+    },
+    /// The end of pairing. Each side sends `ok: true` only after checking the other's `PairConfirm`.
+    PairResult {
+        /// Whether pairing succeeded.
+        ok: bool,
+    },
 }

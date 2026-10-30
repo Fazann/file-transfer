@@ -1,0 +1,5 @@
+# Prettier and rustfmt expect LF, also on Windows checkouts.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary

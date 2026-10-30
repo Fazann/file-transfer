@@ -10,10 +10,12 @@ use tokio::sync::watch;
 pub struct Progress {
     /// Bytes the receiver has verified so far, including `resumed`.
     pub transferred: u64,
-    /// Total size of the file in bytes.
+    /// Total size of every file in the transfer, in bytes.
     pub total: u64,
     /// Bytes the receiver already had when the current connection started. Zero for a fresh transfer.
     pub resumed: u64,
+    /// Index in the offer of the entry that moved data last, to show which file is being transferred.
+    pub current_entry: u32,
 }
 
 /// Creates a progress channel starting at zero. Pass the sender to a transfer and watch the receiver.
