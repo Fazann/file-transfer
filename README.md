@@ -173,6 +173,11 @@ listed in `release.yml` exist. A local `tauri build` needs `TAURI_SIGNING_PRIVAT
 
 ## Development
 
+`make` lists the common commands: `make dev` runs the app with live reload, `make check` runs what CI runs, and
+`make release` builds installers for the computer you are on (`release-mac`, `release-linux` for Debian and Ubuntu,
+`release-windows`). Installers can only be built on their own system. On Windows, `make` needs Git Bash. On Debian and
+Ubuntu, run `make deps-linux` once first.
+
 Formatting uses nightly-only rustfmt options, so install the nightly rustfmt once:
 
 ```sh
