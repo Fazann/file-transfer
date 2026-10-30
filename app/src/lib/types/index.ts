@@ -120,6 +120,14 @@ export interface HistoryEntry {
   finishedAt: number;
 }
 
+export const THEMES = ['light', 'dark'] as const;
+
+export type Theme = (typeof THEMES)[number];
+
+export function isTheme(value: string): value is Theme {
+  return (THEMES as readonly string[]).includes(value);
+}
+
 /** Everything the Settings page edits. */
 export interface Settings {
   deviceName: string;
@@ -129,6 +137,7 @@ export interface Settings {
   bandwidthLimitMbps: number;
   allowUntrusted: boolean;
   language: Locale | null;
+  theme: Theme | null;
   closeToTray: boolean;
   startAtLogin: boolean;
 }

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use lanshare_core::paths;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, State, Theme};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::{
@@ -26,6 +26,7 @@ pub struct SettingsPayload {
     bandwidth_limit_mbps: u32,
     allow_untrusted: bool,
     language: Option<String>,
+    theme: Option<Theme>,
     close_to_tray: bool,
     start_at_login: bool,
 }
@@ -43,6 +44,7 @@ pub fn get_settings(state: State<'_, AppState>) -> SettingsPayload {
         bandwidth_limit_mbps: config.bandwidth_limit_mbps,
         allow_untrusted: config.allow_untrusted,
         language: settings.language,
+        theme: settings.theme,
         close_to_tray: settings.close_to_tray,
         start_at_login: settings.start_at_login,
     }
@@ -70,6 +72,7 @@ pub async fn update_settings(
 
     let app_settings = AppSettings {
         language: settings.language.clone(),
+        theme: settings.theme,
         close_to_tray: settings.close_to_tray,
         start_at_login: settings.start_at_login,
     };
@@ -93,6 +96,13 @@ pub async fn update_settings(
 #[tauri::command]
 pub fn set_tray_labels(menu: State<'_, TrayMenu>, labels: TrayLabels) -> CommandResult<()> {
     menu.set_labels(&labels).map_err(|error| CommandError::io(&error))
+}
+
+/// Applies a theme at once, to the window, its native parts and the web view's `prefers-color-scheme`. `None` follows
+/// the operating system. Saving it is up to `update_settings`.
+#[tauri::command]
+pub fn set_theme(app: AppHandle, theme: Option<Theme>) {
+    app.set_theme(theme);
 }
 
 /// Saves logs and settings to a zip file at `destination`.

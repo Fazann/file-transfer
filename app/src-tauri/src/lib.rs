@@ -13,7 +13,7 @@ mod state;
 mod tray;
 
 use lanshare_core::paths;
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{Manager, RunEvent, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
 use tracing_appender::{
     non_blocking::WorkerGuard,
@@ -69,7 +69,10 @@ pub fn run() -> tauri::Result<()> {
             // Setup is not async; the service needs the async runtime that Tauri already runs.
             let state = tauri::async_runtime::block_on(AppState::init(&handle))
                 .map_err(|error| format!("LanShare could not start: {}", error.code))?;
+            // Created here, not from the config, because a window opened first would start in the system's theme.
+            let theme = lock(&state.settings).theme;
             app.manage(state);
+            WebviewWindowBuilder::from_config(&handle, &app.config().app.windows[0])?.theme(theme).build()?;
             tray::create(&handle)?;
             Ok(())
         })
@@ -101,6 +104,7 @@ pub fn run() -> tauri::Result<()> {
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::settings::set_tray_labels,
+            commands::settings::set_theme,
             commands::settings::export_diagnostics,
             commands::history::get_history,
             commands::history::clear_history,

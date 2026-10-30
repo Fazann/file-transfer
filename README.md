@@ -207,7 +207,7 @@ npm run format:check && npm run lint && npm run check && npm run test
 ```
 
 The app and the CLI share one identity, trust list and `config.toml`, so a device paired in one is paired in the
-other. App-only settings (language, close to tray, start at login) are in `app-settings.json` in the same folder, and
+other. App-only settings (language, theme, close to tray, start at login) are in `app-settings.json` in the same folder, and
 the transfer history in `history.db` in the data folder.
 
 Fuzzing the frame decoder needs `cargo install cargo-fuzz` and the nightly toolchain:

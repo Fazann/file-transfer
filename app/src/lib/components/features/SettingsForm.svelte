@@ -1,7 +1,7 @@
 <script lang="ts">
   import { _, locale as i18nLocale } from 'svelte-i18n';
 
-  import { exportDiagnostics, pickFolder, pickSavePath } from '$lib/api';
+  import { exportDiagnostics, pickFolder, pickSavePath, setTheme } from '$lib/api';
   import Button from '$lib/components/ui/Button.svelte';
   import Checkbox from '$lib/components/ui/Checkbox.svelte';
   import Input from '$lib/components/ui/Input.svelte';
@@ -11,22 +11,24 @@
   import { refreshSelf } from '$lib/stores/peers';
   import { saveSettings, settings } from '$lib/stores/settings';
   import { showToast } from '$lib/stores/toasts';
-  import { isCommandError } from '$lib/types';
+  import { isCommandError, isTheme, THEMES } from '$lib/types';
   import { errorMessage } from '$lib/utils/errors';
 
   import type { Locale, Settings } from '$lib/types';
 
-  /** `system` follows the operating system's language. */
+  /** `system` follows the operating system's language or appearance. */
   const SYSTEM = 'system';
 
   let draft: Settings | null = $state(null);
   let language = $state(SYSTEM);
+  let theme = $state(SYSTEM);
   let saving = $state(false);
 
   $effect(() => {
     if (draft === null && $settings !== null) {
       draft = { ...$settings };
       language = $settings.language ?? SYSTEM;
+      theme = $settings.theme ?? SYSTEM;
     }
   });
 
@@ -35,9 +37,19 @@
     ...LOCALES.map((code) => ({ value: code, label: $_(`languages.${code}`) })),
   ]);
 
+  const themeOptions = $derived([
+    { value: SYSTEM, label: $_('settings.theme_system') },
+    ...THEMES.map((code) => ({ value: code, label: $_(`settings.theme_${code}`) })),
+  ]);
+
   /** Language applies at once and is saved with the other settings. */
   function changeLanguage(value: string): void {
     setLocale(isLocale(value) ? value : systemLocale());
+  }
+
+  /** Like language, the theme applies at once and is saved with the other settings. */
+  function changeTheme(value: string): void {
+    void setTheme(isTheme(value) ? value : null);
   }
 
   async function chooseFolder(): Promise<void> {
@@ -78,6 +90,7 @@
         streams: Number(draft.streams),
         bandwidthLimitMbps: Number(draft.bandwidthLimitMbps),
         language: isLocale(language) ? language : null,
+        theme: isTheme(theme) ? theme : null,
       };
       draft = { ...(await saveSettings(next)) };
       await refreshSelf();
@@ -100,6 +113,13 @@
         options={languageOptions}
         bind:value={language}
         onchange={changeLanguage}
+      />
+      <Select
+        id="theme"
+        label={$_('settings.theme')}
+        options={themeOptions}
+        bind:value={theme}
+        onchange={changeTheme}
       />
       <Checkbox label={$_('settings.close_to_tray')} bind:checked={draft.closeToTray} />
       <Checkbox label={$_('settings.start_at_login')} bind:checked={draft.startAtLogin} />

@@ -1,6 +1,7 @@
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
 
+import { setTheme, updateSettings } from '$lib/api';
 import { setupI18n } from '$lib/i18n';
 import { setLocale } from '$lib/stores/locale';
 
@@ -16,6 +17,7 @@ const settings: Settings = {
   bandwidthLimitMbps: 0,
   allowUntrusted: false,
   language: 'en',
+  theme: null,
   closeToTray: true,
   startAtLogin: false,
 };
@@ -28,6 +30,8 @@ vi.mock('$lib/api', () => ({
   listPeers: vi.fn(async () => [desk]),
   getHistory: vi.fn(async () => []),
   listTrusted: vi.fn(async () => []),
+  updateSettings: vi.fn(async (next: Settings) => next),
+  setTheme: vi.fn(async () => undefined),
   setTrayLabels: vi.fn(async () => undefined),
   onEvent: vi.fn(async () => () => undefined),
   onFileDrop: vi.fn(async () => () => undefined),
@@ -62,6 +66,35 @@ describe('App', () => {
     await settle();
     expect(document.documentElement.dir).toBe('ltr');
     expect(document.body.textContent).toContain('ឧបករណ៍');
+    unmount(app);
+  });
+
+  it('applies a theme at once and saves it with the settings', async () => {
+    setupI18n('en');
+    const app = mount(App, { target: document.body });
+    await settle();
+    const tabs = [...document.querySelectorAll('button')];
+    tabs.find((button) => button.textContent.includes('Settings'))?.click();
+    await settle();
+
+    const select = document.querySelector<HTMLSelectElement>('#theme');
+    if (select === null) {
+      throw new Error('the theme select is missing');
+    }
+    const choose = (value: string): void => {
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      flushSync();
+    };
+    choose('dark');
+    expect(setTheme).toHaveBeenLastCalledWith('dark');
+    choose('system');
+    expect(setTheme).toHaveBeenLastCalledWith(null);
+
+    choose('light');
+    document.querySelector('form')?.requestSubmit();
+    await settle();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ theme: 'light' }));
     unmount(app);
   });
 });

@@ -2,7 +2,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 
-import type { HistoryEntry, Peer, SelfInfo, Settings, TrayLabels, TrustedDevice } from '$lib/types';
+import type { HistoryEntry, Peer, SelfInfo, Settings, Theme, TrayLabels, TrustedDevice } from '$lib/types';
 
 export const getSelf = (): Promise<SelfInfo> => invoke('get_self');
 export const listPeers = (): Promise<Peer[]> => invoke('list_peers');
@@ -26,6 +26,7 @@ export const setAutoAccept = (id: string, autoAccept: boolean): Promise<void> =>
 export const getSettings = (): Promise<Settings> => invoke('get_settings');
 export const updateSettings = (settings: Settings): Promise<Settings> => invoke('update_settings', { settings });
 export const setTrayLabels = (labels: TrayLabels): Promise<void> => invoke('set_tray_labels', { labels });
+export const setTheme = (theme: Theme | null): Promise<void> => invoke('set_theme', { theme });
 export const exportDiagnostics = (destination: string): Promise<void> => invoke('export_diagnostics', { destination });
 
 export const getHistory = (): Promise<HistoryEntry[]> => invoke('get_history');

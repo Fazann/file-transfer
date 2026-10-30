@@ -1,10 +1,11 @@
-//! App-only settings in `app-settings.json` next to `config.toml`: language, close to tray, start at login.
+//! App-only settings in `app-settings.json` next to `config.toml`: language, theme, close to tray, start at login.
 //! Network settings stay in the core `config.toml`, shared with the CLI.
 
 use std::{fs, io, path::Path};
 
 use lanshare_core::paths;
 use serde::{Deserialize, Serialize};
+use tauri::Theme;
 
 /// File name inside `paths::config_dir()`.
 pub const SETTINGS_FILE_NAME: &str = "app-settings.json";
@@ -15,6 +16,8 @@ pub const SETTINGS_FILE_NAME: &str = "app-settings.json";
 pub struct AppSettings {
     /// `en`, `km` or `ar`; `None` follows the operating system's language.
     pub language: Option<String>,
+    /// Light or dark; `None` follows the operating system's appearance.
+    pub theme: Option<Theme>,
     /// Closing the window hides it to the tray, and receiving continues.
     pub close_to_tray: bool,
     /// Start the app when the user logs in.
@@ -23,7 +26,7 @@ pub struct AppSettings {
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { language: None, close_to_tray: true, start_at_login: false }
+        Self { language: None, theme: None, close_to_tray: true, start_at_login: false }
     }
 }
 
@@ -72,10 +75,25 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(SETTINGS_FILE_NAME);
         assert_eq!(AppSettings::load_from(&path), AppSettings::default());
-        let settings = AppSettings { language: Some("km".into()), close_to_tray: false, start_at_login: true };
+        let settings = AppSettings {
+            language: Some("km".into()),
+            theme: Some(Theme::Dark),
+            close_to_tray: false,
+            start_at_login: true,
+        };
         settings.save_to(&path).unwrap();
         assert_eq!(AppSettings::load_from(&path), settings);
         fs::write(&path, "{ not json").unwrap();
         assert_eq!(AppSettings::load_from(&path), AppSettings::default());
+    }
+
+    #[test]
+    fn settings_saved_before_themes_existed_follow_the_system() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SETTINGS_FILE_NAME);
+        fs::write(&path, r#"{ "language": "ar", "closeToTray": false, "startAtLogin": false }"#).unwrap();
+        let settings = AppSettings::load_from(&path);
+        assert_eq!(settings.language.as_deref(), Some("ar"));
+        assert_eq!(settings.theme, None);
     }
 }
