@@ -89,6 +89,17 @@ export interface TransferFailed {
   error: CommandError;
 }
 
+/** Event `text-received`: a paired device sent a text. It is kept only until the user closes it. */
+export interface ReceivedText {
+  deviceId: string;
+  deviceName: string;
+  fingerprint: string;
+  text: string;
+}
+
+/** The most bytes of UTF-8 one text may have, as `MAX_TEXT_BYTES` in `lanshare-core`. */
+export const MAX_TEXT_BYTES = 64 * 1024;
+
 /** Event `pairing-pin`: another device asks to pair; show the PIN. */
 export interface PairingPin {
   requestId: number;

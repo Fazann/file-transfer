@@ -9,6 +9,7 @@ import type {
   PairingPin,
   PairingResult,
   Peer,
+  ReceivedText,
   TransferComplete,
   TransferFailed,
   TransferProgress,
@@ -27,6 +28,7 @@ export interface EventPayloads {
   'transfer-complete': TransferComplete;
   'transfer-failed': TransferFailed;
   'receive-refused': CommandError;
+  'text-received': ReceivedText;
   'pairing-pin': PairingPin;
   'pairing-result': PairingResult;
 }

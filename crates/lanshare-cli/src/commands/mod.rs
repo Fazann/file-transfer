@@ -5,6 +5,7 @@ mod devices;
 mod pair;
 mod receive;
 mod send;
+mod send_text;
 mod trusted;
 mod whoami;
 
@@ -56,6 +57,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Command::Receive(args) => receive::run(args, &context).await,
         Command::Send(args) => send::run(args, &context).await,
+        Command::SendText(args) => send_text::run(args, &context).await,
         Command::Devices => devices::run(&context).await,
         Command::Bench(args) => bench::run(args, &context).await,
         Command::Pair(args) => pair::run(args, &context).await,

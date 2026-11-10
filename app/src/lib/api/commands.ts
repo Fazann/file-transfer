@@ -15,6 +15,11 @@ export const resumeTransfer = (id: number): Promise<boolean> => invoke('resume',
 export const cancelTransfer = (id: number): Promise<boolean> => invoke('cancel', { id });
 export const pauseAll = (): Promise<void> => invoke('pause_all');
 
+export const sendText = (peerId: string, text: string): Promise<void> => invoke('send_text', { peerId, text });
+/** The clipboard's text, or an empty string when it holds none. */
+export const readClipboard = (): Promise<string> => invoke('read_clipboard');
+export const writeClipboard = (text: string): Promise<void> => invoke('write_clipboard', { text });
+
 export const startPairing = (peerId: string): Promise<number> => invoke('start_pairing', { peerId });
 export const submitPin = (requestId: number, pin: string | null): Promise<boolean> =>
   invoke('submit_pin', { requestId, pin });

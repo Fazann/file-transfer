@@ -20,8 +20,8 @@ use lanshare_core::{
     pairing::{self, PairingLockout, PairingPeer, PinPrompt, MAX_FAILURES},
     protocol::{read_message, write_message, Message, PROTOCOL_VERSION},
     transfer::{
-        progress_channel, receive_file, send_file, IncomingOffer, OfferDecider, ReceiveOutcome, ReceivePolicy,
-        SendOptions, TransferControl,
+        progress_channel, receive_file, send_file, send_text, IncomingOffer, OfferDecider, ReceiveOutcome,
+        ReceivePolicy, SendOptions, TransferControl,
     },
     transport::{
         self, AnyConnection, ConnectOptions, Connection, Listener, PeerCheck, TransportPreference,
@@ -301,6 +301,22 @@ async fn allow_untrusted_asks_the_user() {
     send_small_file(&sender, running.addr, TransportPreference::Quic).await.unwrap();
     assert!(matches!(handled.await.unwrap().unwrap(), ReceiveOutcome::Saved(_)));
     assert!(!user.last_offer.lock().unwrap().clone().unwrap().trusted);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn text_from_an_unpaired_device_is_rejected_even_with_allow_untrusted() {
+    let (sender, receiver) = (Device::new("Visitor"), Device::new("Desk"));
+    sender.trust(&receiver).await;
+    let running = Running::start(&receiver, Policy { allow_untrusted: true }).await;
+
+    let user = Receiver::new(true);
+    let handled = running.receive_one(&user);
+    let options = sender.connect_options(TransportPreference::Quic, sender.trusted_check());
+    let connection = transport::connect(running.addr, &options).await.unwrap();
+    let error = send_text(&connection, &sender.info, "click this link").await.unwrap_err();
+    assert_eq!(error.code(), ErrorCode::UntrustedDevice);
+    assert_eq!(handled.await.unwrap().unwrap_err().code(), ErrorCode::UntrustedDevice);
+    assert!(!user.asked.load(Ordering::SeqCst));
 }
 
 #[tokio::test(flavor = "multi_thread")]

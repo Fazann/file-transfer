@@ -17,6 +17,11 @@ describe('errorMessage', () => {
     expect(errorMessage(echo, error, 'en')).toBe('errors.PAIRING_LOCKED {"device":"","seconds":300}');
   });
 
+  it('formats the text size limit as bytes', () => {
+    const error = { code: 'TEXT_TOO_LONG', params: { maxBytes: 65_536 } };
+    expect(errorMessage(echo, error, 'en')).toBe('errors.TEXT_TOO_LONG {"device":"","maxBytes":"65.5 kB"}');
+  });
+
   it('passes the folder of a refused write through', () => {
     const error = { code: 'PERMISSION_DENIED', params: { folder: '/data' } };
     expect(errorMessage(echo, error, 'en')).toBe('errors.PERMISSION_DENIED {"device":"","folder":"/data"}');

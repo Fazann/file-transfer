@@ -8,6 +8,7 @@ pub mod devices;
 pub mod history;
 pub mod pairing;
 pub mod settings;
+pub mod text;
 pub mod transfers;
 
 use lanshare_core::{identity::DeviceId, ErrorCode};

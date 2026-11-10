@@ -14,7 +14,7 @@ use lanshare_core::{
     identity::{TrustStore, TrustedDevice},
     pairing::PairingPeer,
     service::{Direction, LanShareService, ServiceEvent, TransferId, TransferInfo},
-    transfer::IncomingOffer,
+    transfer::{IncomingOffer, ReceivedText},
     ErrorCode,
 };
 use serde::Serialize;
@@ -165,6 +165,27 @@ struct FailedPayload {
     error: CommandError,
 }
 
+/// A text from a paired device. Not `Debug`: the text may be a password and must never reach a log.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TextPayload {
+    device_id: String,
+    device_name: String,
+    fingerprint: String,
+    text: String,
+}
+
+impl From<ReceivedText> for TextPayload {
+    fn from(received: ReceivedText) -> Self {
+        Self {
+            device_id: received.device_id.to_string(),
+            device_name: received.device_name,
+            fingerprint: received.fingerprint.short(),
+            text: received.text,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PinPayload {
@@ -258,6 +279,8 @@ impl Forwarder {
                 self.emit("transfer-failed", FailedPayload { id, error: CommandError::from(&error) });
             }
             ServiceEvent::ReceiveRefused { error } => self.emit("receive-refused", CommandError::from(&error)),
+            // Texts are not transfers: nothing to track, and never written to the history.
+            ServiceEvent::TextReceived(text) => self.emit("text-received", TextPayload::from(text)),
             ServiceEvent::PairingPin { request_id, peer, pin } => {
                 self.emit("pairing-pin", PinPayload::new(request_id, &peer, pin));
             }

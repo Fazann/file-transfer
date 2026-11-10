@@ -4,7 +4,7 @@
 use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use super::{Message, PROTOCOL_VERSION};
+use super::{is_supported_version, Message, PROTOCOL_VERSION};
 use crate::error::{Error, Result};
 
 /// Largest allowed frame payload in bytes (1 MiB). Larger frames are a protocol violation.
@@ -104,7 +104,7 @@ where
 
 fn decode_payload(payload: &[u8]) -> Result<Message> {
     postcard::from_bytes(payload).map_err(|error| match peek_hello_version(payload) {
-        Some(theirs) if theirs != PROTOCOL_VERSION => Error::VersionMismatch { ours: PROTOCOL_VERSION, theirs },
+        Some(theirs) if !is_supported_version(theirs) => Error::VersionMismatch { ours: PROTOCOL_VERSION, theirs },
         _ => Error::protocol_violation(format!("cannot decode message: {error}")),
     })
 }
@@ -137,6 +137,22 @@ mod tests {
         protocol::{EntryResume, OfferEntry},
     };
 
+    #[test]
+    fn text_offer_is_variant_18() {
+        // Version 6 ends at `PairResult` (17); `TextOffer` must come right after it.
+        let payload = postcard::to_allocvec(&Message::TextOffer { text: "hi".into() }).unwrap();
+        assert_eq!(payload, [18, 2, b'h', b'i']);
+    }
+
+    #[test]
+    fn supported_hello_versions_do_not_count_as_a_mismatch() {
+        // A `Hello` with trailing bytes this version cannot decode, but a version it accepts.
+        for (version, mismatch) in [(5, true), (6, false), (7, false), (8, true)] {
+            let error = decode_payload(&[0, version, 0xff]).unwrap_err();
+            assert_eq!(matches!(error, Error::VersionMismatch { .. }), mismatch, "version {version}");
+        }
+    }
+
     #[tokio::test]
     async fn every_message_round_trips() {
         let messages = [
@@ -159,6 +175,7 @@ mod tests {
             Message::Resume,
             Message::BenchOffer { transfer_id: Uuid::new_v4(), size: 2_000_000_000 },
             Message::Error { code: ErrorCode::Io, detail: Some("disk full".into()) },
+            Message::TextOffer { text: "https://example.com/ünïcode ✓".into() },
         ];
         let (mut client, mut server) = duplex(64 * 1024);
         for message in &messages {

@@ -5,6 +5,8 @@
   import { notify, onEvent, setTrayLabels } from '$lib/api';
   import IncomingOfferDialog from '$lib/components/features/IncomingOfferDialog.svelte';
   import PairingDialog from '$lib/components/features/PairingDialog.svelte';
+  import ReceivedTextDialog from '$lib/components/features/ReceivedTextDialog.svelte';
+  import SendTextDialog from '$lib/components/features/SendTextDialog.svelte';
   import ToastHost from '$lib/components/features/ToastHost.svelte';
   import UpdateDialog from '$lib/components/features/UpdateDialog.svelte';
   import Sidebar from '$lib/components/ui/Sidebar.svelte';
@@ -16,6 +18,7 @@
   import { startPairingEvents, type PairingOutcome } from '$lib/stores/pairing';
   import { startPeers } from '$lib/stores/peers';
   import { loadSettings } from '$lib/stores/settings';
+  import { startTexts } from '$lib/stores/texts';
   import { showToast } from '$lib/stores/toasts';
   import { activeCount, startTransfers } from '$lib/stores/transfers';
   import { startUpdateCheck } from '$lib/stores/update';
@@ -28,7 +31,7 @@
   import TransfersPage from './pages/TransfersPage.svelte';
 
   import type { IconName } from '$lib/components/ui/Icon.svelte';
-  import type { CommandError, IncomingOffer, Locale } from '$lib/types';
+  import type { CommandError, IncomingOffer, Locale, ReceivedText } from '$lib/types';
 
   type Page = 'devices' | 'transfers' | 'history' | 'settings';
 
@@ -46,6 +49,12 @@
   function offerNotification(offer: IncomingOffer): { title: string; body: string } {
     const values = { device: offer.deviceName, file: offer.fileName, size: formatBytes(offer.size, current) };
     return { title: $_('notifications.offer_title'), body: $_('notifications.offer_body', { values }) };
+  }
+
+  /** Names the sender only: the text itself may be a password, and notifications show on the lock screen. */
+  function textNotification(text: ReceivedText): { title: string; body: string } {
+    const values = { device: text.deviceName };
+    return { title: $_('notifications.text_title'), body: $_('notifications.text_body', { values }) };
   }
 
   /** Only the user here can fix what refused the offer, so they hear about it even with the window hidden. */
@@ -75,6 +84,7 @@
       startPeers(),
       startTransfers(),
       startOffers(offerNotification),
+      startTexts(textNotification),
       startPairingEvents(pairingDone),
       startHistory(),
       onEvent('receive-refused', receiveRefused),
@@ -113,6 +123,8 @@
 </div>
 
 <IncomingOfferDialog />
+<ReceivedTextDialog />
+<SendTextDialog />
 <PairingDialog />
 <UpdateDialog />
 <ToastHost />

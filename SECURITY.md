@@ -79,6 +79,11 @@ auto_accept = false
   without it needs the user to accept each file; an unpaired device is rejected with `UNTRUSTED_DEVICE`, unless
   `allow_untrusted = true` in `config.toml`, in which case the user is asked and the prompt says the device is not
   paired. `auto_accept` and `allow_untrusted` are both off by default.
+- **Texts** are shown without a prompt, so they are accepted from paired devices only, whatever `allow_untrusted`
+  says: an unknown device on the network cannot put words (a fake warning, a phishing link) on the screen. A text may
+  be a password, so it is never written to disk or logs, never kept in the history, and never shown in a
+  notification; the app forgets it once the dialog is closed. The terminal strips control characters from it, except
+  line breaks and tabs.
 - `lanshare trusted remove <device>` forgets a device. A running receiver re-reads the file before every check, so the
   device is refused at once and must pair again.
 
@@ -113,6 +118,7 @@ For extra certainty, users can compare the fingerprints shown during pairing wit
 - Frames are limited to 1 MiB and checked before they are decoded. The frame decoder (`protocol::read_message`) is
   fuzzed with `cargo-fuzz` (see the README).
 - File names in offers are sanitized, and received files never overwrite existing ones.
+- A text is at most 64 KiB, checked by the sender and again by the receiver.
 - TLS 1.3 only, through `rustls` with the `ring` crypto provider. No session resumption.
 
 ## Paths and updates

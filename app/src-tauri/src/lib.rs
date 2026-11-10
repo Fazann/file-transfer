@@ -59,6 +59,7 @@ pub fn run() -> tauri::Result<()> {
     let _log_guard = init_logging();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
@@ -96,6 +97,9 @@ pub fn run() -> tauri::Result<()> {
             commands::transfers::resume,
             commands::transfers::cancel,
             commands::transfers::pause_all,
+            commands::text::send_text,
+            commands::text::read_clipboard,
+            commands::text::write_clipboard,
             commands::pairing::start_pairing,
             commands::pairing::submit_pin,
             commands::pairing::list_trusted,

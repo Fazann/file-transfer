@@ -7,6 +7,9 @@ import type { CommandError, Locale } from '$lib/types';
 /** svelte-i18n's message function, as far as this module needs it. */
 export type Translate = (key: string, options?: { values?: Record<string, string | number> }) => string;
 
+/** Params that hold a number of bytes. */
+const BYTE_PARAMS = ['needed', 'available', 'maxBytes'];
+
 /** Errors that are what macOS shows when LanShare has no Local Network permission. */
 const LOCAL_NETWORK_CODES = ['PEER_UNREACHABLE', 'TRANSPORT_UNAVAILABLE'];
 
@@ -27,7 +30,7 @@ export function errorMessage(
   const values: Record<string, string | number> = { device: '', ...context };
   for (const [name, value] of Object.entries(error.params)) {
     if (typeof value === 'number') {
-      values[name] = name === 'needed' || name === 'available' ? formatBytes(value, locale) : value;
+      values[name] = BYTE_PARAMS.includes(name) ? formatBytes(value, locale) : value;
     } else if (typeof value === 'string') {
       values[name] = value;
     }

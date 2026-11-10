@@ -22,10 +22,11 @@ use std::{
 use lanshare_core::{
     identity::{DeviceCertificate, DeviceId, DeviceInfo, Os, TrustStore},
     pairing::{PairingLockout, PairingPeer},
-    protocol::{read_message, write_message, EntryResume, Message, OfferEntry, PROTOCOL_VERSION},
+    protocol::{read_message, write_message, EntryResume, Message, OfferEntry, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION},
     transfer::{
-        progress_channel, receive_file, run_bench, send_file, send_files, IncomingOffer, OfferDecider, Progress,
-        ReceiveOutcome, ReceivePolicy, ReceivedFile, SendOptions, TransferControl, DEFAULT_CHUNK_SIZE,
+        progress_channel, receive_file, run_bench, send_file, send_files, send_text, IncomingOffer, OfferDecider,
+        Progress, ReceiveOutcome, ReceivePolicy, ReceivedFile, SendOptions, TransferControl, DEFAULT_CHUNK_SIZE,
+        MAX_TEXT_BYTES,
     },
     transport::{
         self, AnyConnection, ConnectOptions, Connection, Listener, PeerCheck, PeerSession, RecvHalf, SendHalf,
@@ -1142,4 +1143,70 @@ async fn chunk_data_on_the_control_channel_is_a_violation() {
     write_message(&mut control, &Message::ChunkHeader { entry: 0, index: 0, len: 4, hash }).await.unwrap();
 
     assert_eq!(receiver.await.unwrap().unwrap_err().code(), ErrorCode::ProtocolViolation);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Text.
+
+async fn text_round_trips(preference: TransportPreference) {
+    let (_source_dir, download_dir, _cache_dir) = dirs();
+    // Exactly the limit, with two-byte characters and a line break in the middle.
+    let mut text = "é".repeat(MAX_TEXT_BYTES / 2 - 1);
+    text.insert_str(10, "\n\t");
+    assert_eq!(text.len(), MAX_TEXT_BYTES);
+    for text in ["https://example.com/a?b=c", text.as_str()] {
+        let (listener, addr) = local_listener().await;
+        let receiver = spawn_receiver(listener, download_dir.path().to_owned(), false);
+        let connection = transport::connect(addr, &connect_options(preference)).await.unwrap();
+        send_text(&connection, &sender_info(), text).await.unwrap();
+        let ReceiveOutcome::Text(got) = receiver.await.unwrap().unwrap() else { panic!("expected a text") };
+        assert_eq!(got.text, text);
+        assert_eq!(got.device_name, "test-sender");
+        assert_eq!(got.fingerprint, identities().sender.fingerprint());
+    }
+    assert_eq!(file_names(download_dir.path()), Vec::<String>::new(), "a text writes nothing to disk");
+}
+over_both_transports!(text_round_trips: text_round_trips_over_tcp, text_round_trips_over_quic);
+
+#[tokio::test]
+async fn text_too_long_is_refused_by_the_receiver() {
+    let (_source_dir, download_dir, _cache_dir) = dirs();
+    let (listener, addr) = local_listener().await;
+    let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
+    let expected = ErrorCode::TextTooLong { max_bytes: 65_536 };
+
+    // `send_text` checks the length itself, so this sender writes the message by hand.
+    let mut stream = raw_control(addr).await;
+    write_message(&mut stream, &hello("long", PROTOCOL_VERSION)).await.unwrap();
+    write_message(&mut stream, &Message::TextOffer { text: "a".repeat(MAX_TEXT_BYTES + 1) }).await.unwrap();
+    assert_eq!(read_message(&mut stream).await.unwrap(), Message::Reject { code: expected.clone() });
+    assert_eq!(receiver.await.unwrap().unwrap_err().code(), expected);
+}
+
+#[tokio::test]
+async fn hello_versions_six_and_seven_are_accepted() {
+    for version in [MIN_PROTOCOL_VERSION, PROTOCOL_VERSION] {
+        let (_source_dir, download_dir, _cache_dir) = dirs();
+        let (listener, addr) = local_listener().await;
+        let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
+        let mut stream = raw_control(addr).await;
+        write_message(&mut stream, &hello("any", version)).await.unwrap();
+        write_message(&mut stream, &Message::TextOffer { text: "hi".into() }).await.unwrap();
+        assert_eq!(read_message(&mut stream).await.unwrap(), Message::Done, "version {version}");
+        // Closing at once spares the receiver its wait for the sender to close.
+        drop(stream);
+        assert!(matches!(receiver.await.unwrap().unwrap(), ReceiveOutcome::Text(_)));
+    }
+}
+
+#[tokio::test]
+async fn hello_older_than_version_six_is_a_mismatch() {
+    let (_source_dir, download_dir, _cache_dir) = dirs();
+    let (listener, addr) = local_listener().await;
+    let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);
+    let mut stream = raw_control(addr).await;
+    write_message(&mut stream, &hello("old", MIN_PROTOCOL_VERSION - 1)).await.unwrap();
+    let expected = ErrorCode::VersionMismatch { ours: PROTOCOL_VERSION, theirs: MIN_PROTOCOL_VERSION - 1 };
+    assert_eq!(read_message(&mut stream).await.unwrap(), Message::Reject { code: expected.clone() });
+    assert_eq!(receiver.await.unwrap().unwrap_err().code(), expected);
 }

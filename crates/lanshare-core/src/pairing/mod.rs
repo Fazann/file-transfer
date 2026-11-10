@@ -36,7 +36,7 @@ use tracing::{debug, info, warn};
 use crate::{
     error::{Error, Result},
     identity::{DeviceId, DeviceInfo, Fingerprint, TrustStore, TrustedDevice},
-    protocol::{read_message, Message, PROTOCOL_VERSION},
+    protocol::{is_supported_version, read_message, Message, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION},
     transfer::ControlWriter,
     transport::{Connection, PeerSession, HANDSHAKE_TIMEOUT},
 };
@@ -83,7 +83,7 @@ where
     let (send, mut recv) = connection.open_control().await?;
     let writer = ControlWriter::new(send);
     let hello =
-        Message::Hello { protocol_version: PROTOCOL_VERSION, device_id: local.id, device_name: local.name.clone() };
+        Message::Hello { protocol_version: MIN_PROTOCOL_VERSION, device_id: local.id, device_name: local.name.clone() };
     writer.send(&hello).await?;
     writer.send(&Message::PairRequest).await?;
     let receiver = read_receiver_hello(&mut recv, connection.session()).await?;
@@ -113,7 +113,7 @@ struct Keys {
 
 async fn read_receiver_hello<R: AsyncRead + Unpin>(recv: &mut R, session: &PeerSession) -> Result<PairingPeer> {
     match read(recv, HANDSHAKE_TIMEOUT).await? {
-        Message::Hello { protocol_version, device_id, device_name } if protocol_version == PROTOCOL_VERSION => {
+        Message::Hello { protocol_version, device_id, device_name } if is_supported_version(protocol_version) => {
             Ok(PairingPeer { device_id, device_name, fingerprint: session.fingerprint })
         }
         Message::Hello { protocol_version, .. } => {
@@ -187,8 +187,11 @@ impl PairingAnswer<'_> {
             return Err(error);
         }
         let local = self.local;
-        let hello =
-            Message::Hello { protocol_version: PROTOCOL_VERSION, device_id: local.id, device_name: local.name.clone() };
+        let hello = Message::Hello {
+            protocol_version: MIN_PROTOCOL_VERSION,
+            device_id: local.id,
+            device_name: local.name.clone(),
+        };
         writer.send(&hello).await?;
         let pin = generate_pin()?;
         show_pin(&self.sender, &pin);

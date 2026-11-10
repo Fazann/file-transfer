@@ -1,16 +1,18 @@
 # LanShare Protocol
 
-Current version: **6** (`PROTOCOL_VERSION` in `crates/lanshare-core/src/protocol/mod.rs`).
+Current version: **7** (`PROTOCOL_VERSION` in `crates/lanshare-core/src/protocol/mod.rs`). Version 7 is version 6
+plus [texts](#texts); devices speak both (see [Versions](#versions)).
 
-**This format is frozen for the 1.x releases.** Later changes must stay compatible with version 6, or increase the
-version deliberately and be recorded in the [changelog](#changelog) below.
+**Version 6 is frozen for the 1.x releases.** Later changes must stay compatible with it, or increase the version
+deliberately and be recorded in the [changelog](#changelog) below.
 
 Transfers run over QUIC on UDP port `52000`, or over TCP on port `52000` when QUIC cannot connect (see
-[Transports](#transports)). One connection carries one offer. The connecting side is the **sender**; the listening
-side is the **receiver**. Files travel in fixed-size chunks, each with its own BLAKE3 hash, over several parallel data
-streams, so a dropped transfer can resume and every byte is verified. Every connection is encrypted with TLS 1.3, and
-devices recognize each other by certificate fingerprint after pairing with a PIN (see [Security](#security)). Devices
-find each other with mDNS and a UDP broadcast fallback, described under [Discovery](#discovery).
+[Transports](#transports)). One connection carries one offer or one text. The connecting side is the **sender**; the
+listening side is the **receiver**. Files travel in fixed-size chunks, each with its own BLAKE3 hash, over several
+parallel data streams, so a dropped transfer can resume and every byte is verified. Every connection is encrypted with
+TLS 1.3, and devices recognize each other by certificate fingerprint after pairing with a PIN (see
+[Security](#security)). Devices find each other with mDNS and a UDP broadcast fallback, described under
+[Discovery](#discovery).
 
 ## Transports
 
@@ -87,6 +89,7 @@ Chunk data is **not** framed: each `ChunkHeader` frame is followed by exactly `l
 | 15 | `PairMessage` | `data: Vec<u8>` | both | One SPAKE2 message |
 | 16 | `PairConfirm` | `mac: [u8; 32]` | both | Proof of the shared key |
 | 17 | `PairResult` | `ok: bool` | both | End of pairing |
+| 18 | `TextOffer` | `text: String` | sender | Sent instead of `Offer` to hand over a short text (v7) |
 
 `Hello` is also sent by the **receiver**, once, as its answer to `PairRequest` (see [Pairing](#pairing)).
 
@@ -103,10 +106,19 @@ Structs, with fields in wire order:
 - `[u8; 32]` is encoded as exactly 32 bytes, with no length prefix.
 - `Vec<u8>` and `String` are a varint length followed by the bytes.
 
+### Versions
+
+A device accepts a `Hello` whose `protocol_version` is from **6** (`MIN_PROTOCOL_VERSION`) to **7**
+(`PROTOCOL_VERSION`), and answers any other with `Reject { VERSION_MISMATCH }`. A sender announces the **lowest**
+version that has every message it will send: `7` before a `TextOffer`, `6` for files, benchmarks and pairing, and the
+receiver's own `Hello` during pairing is `6` too. So a 1.0 device (version 6 only) still exchanges files and pairs
+with a newer one, and refuses a text with `VERSION_MISMATCH` instead of failing on a message it cannot decode.
+Discovery advertises `PROTOCOL_VERSION`, the newest version a device speaks.
+
 `Hello` stays variant `0`, and `protocol_version` stays its first field, in every future version. A receiver that
-cannot decode a whole `Hello` still reads that prefix (variant `0`, then a varint `u16`), and if the version differs
-from its own it answers `Reject { VERSION_MISMATCH }` instead of `PROTOCOL_VIOLATION`. This works for every peer from
-v2 on. A v1 peer put `device_name` first, so v1 and v2 cannot reliably detect each other's version.
+cannot decode a whole `Hello` still reads that prefix (variant `0`, then a varint `u16`), and if that version is not
+one it accepts, it answers `Reject { VERSION_MISMATCH }` instead of `PROTOCOL_VIOLATION`. This works for every peer
+from v2 on. A v1 peer put `device_name` first, so v1 and v2 cannot reliably detect each other's version.
 
 `Error.detail` is never shown in the UI.
 
@@ -134,6 +146,7 @@ at the end.
 | 14 | `PairingLocked` | `PAIRING_LOCKED` | `retry_after_secs: u64` |
 | 15 | `Busy` | `BUSY` | none (the receiver has no room for another connection) |
 | 16 | `PermissionDenied` | `PERMISSION_DENIED` | `folder: String` (the receiver's folder that refused the write) |
+| 17 | `TextTooLong` | `TEXT_TOO_LONG` | `max_bytes: u64` (the most bytes a text may have) |
 
 ## Chunks and hashes
 
@@ -215,6 +228,27 @@ sender and not part of the wire format.
 user. The sender then sends `size` bytes of generated data as `ChunkHeader` frames (chunks of 8 MiB, `hash` all
 zeros) on its data streams, and the receiver discards them without hashing or writing anything. Once all bytes have
 arrived the receiver sends `Done`. `transfer_id` is a fresh random UUID, used only to route TCP data connections.
+
+### Texts
+
+`TextOffer { text }` replaces `Offer`, after a `Hello` with version 7:
+
+```
+Sender                                         Receiver
+  |---- Hello { 7, device_id, name } ----------->|
+  |---- TextOffer { text } ---------------------->|  sender not paired?       -> Reject { UNTRUSTED_DEVICE }
+  |                                               |  more than 65,536 bytes?  -> Reject { TEXT_TOO_LONG { 65536 } }
+  |                                               |  empty?                    -> Reject { PROTOCOL_VIOLATION }
+  |<------------------------------------- Done ---|  the text is shown to the user
+ close                                          close
+```
+
+- `text` is 1 to **65,536** bytes of UTF-8 (`MAX_TEXT_BYTES`). The sender checks this before connecting.
+- Only paired devices may send text: the receiver shows it without asking, so `allow_untrusted` does not apply and
+  `auto_accept` does not matter. The usual fingerprint checks come first, as for files.
+- Nothing is written to disk and nothing is logged but the size. The desktop app keeps the text only until the user
+  closes it, and leaves it out of the history and out of notifications.
+- There are no data streams, no resume and no retry: if the connection drops, the user sends again.
 
 ### Receiver rules
 
@@ -413,6 +447,13 @@ The peer's address is the datagram's source address. Datagrams without the magic
 ignored.
 
 ## Changelog
+
+### v7
+- New message `TextOffer { text }` (18), sent instead of `Offer` to hand over 1 to 65,536 bytes of text. Receivers
+  take it from paired devices only and answer `Done`.
+- New error code `TEXT_TOO_LONG { max_bytes }` (17).
+- Receivers accept `Hello` versions 6 and 7. Senders announce 7 only before a `TextOffer`, so files and pairing work
+  with 1.0 devices unchanged.
 
 ### v6
 

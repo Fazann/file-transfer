@@ -29,7 +29,8 @@
       "linux": "Linux"
     },
     "send_folder": "Send folder…",
-    "pick_folder_title": "Choose a folder to send"
+    "pick_folder_title": "Choose a folder to send",
+    "send_text": "Send text…"
   },
   "transfers": {
     "title": "Transfers",
@@ -112,6 +113,24 @@
     "accept": "Accept",
     "decline": "Decline"
   },
+  "text": {
+    "send_title": "Send text to {device}",
+    "label": "Text",
+    "paste": "Paste",
+    "size": "{used} of {max}",
+    "too_long": "This is too long for a text. Send it as a file instead.",
+    "send": "Send",
+    "sending": "Sending…",
+    "cancel": "Cancel",
+    "sent": "Text sent to {device}",
+    "clipboard_empty": "The clipboard has no text.",
+    "received_title": "Text received",
+    "from": "From {device}",
+    "copy": "Copy",
+    "copied": "Copied to the clipboard",
+    "close": "Close",
+    "more": "{count, plural, one {# more text waiting} other {# more texts waiting}}"
+  },
   "pairing": {
     "title": "Pair devices",
     "show_pin": "{device} wants to pair with this device. Type this PIN on that device:",
@@ -134,7 +153,9 @@
     "offer_body": "{device} wants to send {file} ({size}).",
     "pairing_title": "Pairing request",
     "pairing_body": "{device} wants to pair. Open LanShare to see the PIN.",
-    "receive_refused_title": "Couldn't receive a transfer"
+    "receive_refused_title": "Couldn't receive a transfer",
+    "text_title": "Text received",
+    "text_body": "{device} sent you a text. Open LanShare to see it."
   },
   "tray": {
     "open": "Open LanShare",
@@ -169,6 +190,7 @@
     "PAIRING_LOCKED": "Too many wrong PINs. Try again in {seconds} seconds.",
     "BUSY": "{device} is busy. Try again in a moment.",
     "PERMISSION_DENIED": "Can't save to {folder}. Choose another download folder in Settings.",
+    "TEXT_TOO_LONG": "This text is too long. At most {maxBytes} can be sent as text; send it as a file instead.",
     "macos_local_network": "On macOS, also check that LanShare is allowed under System Settings → Privacy & Security → Local Network."
   }
 }

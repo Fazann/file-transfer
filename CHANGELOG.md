@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Send a short text (a link, a password, a snippet) to a paired device: **Send text…** on a device card, with
+  **Paste** from the clipboard, and **Copy** on the receiving side. `lanshare send-text` in the terminal, reading
+  standard input when no text is given. Texts are never saved or logged.
+- Wire protocol version 7 adds `TextOffer`. Version 6 devices (LanShare 1.0) still send and receive files with this
+  version; only texts need both devices updated.
+
 ## v1.0.0
 
 First release.

@@ -25,6 +25,7 @@ impl From<&ErrorCode> for CommandError {
             ErrorCode::InsufficientSpace { needed, available } => json!({ "needed": needed, "available": available }),
             ErrorCode::PairingLocked { retry_after_secs } => json!({ "seconds": retry_after_secs }),
             ErrorCode::PermissionDenied { folder } => json!({ "folder": folder }),
+            ErrorCode::TextTooLong { max_bytes } => json!({ "maxBytes": max_bytes }),
             _ => json!({}),
         };
         Self { code: code.name().to_owned(), params }

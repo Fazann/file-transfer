@@ -30,7 +30,7 @@ use super::{
 use crate::{
     error::{Error, Result},
     identity::{DeviceId, DeviceInfo},
-    protocol::{read_message, EntryResume, Message, OfferEntry, PROTOCOL_VERSION},
+    protocol::{read_message, EntryResume, Message, OfferEntry, MIN_PROTOCOL_VERSION},
     transport::Connection,
 };
 
@@ -327,8 +327,11 @@ impl Session<'_> {
         acked: &mut u64,
     ) -> Result<()> {
         let local = self.local;
-        let hello =
-            Message::Hello { protocol_version: PROTOCOL_VERSION, device_id: local.id, device_name: local.name.clone() };
+        let hello = Message::Hello {
+            protocol_version: MIN_PROTOCOL_VERSION,
+            device_id: local.id,
+            device_name: local.name.clone(),
+        };
         writer.send(&hello).await?;
         writer.send(&self.source.offer()).await?;
         let have = wait_for_accept(replies, self.source).await?;

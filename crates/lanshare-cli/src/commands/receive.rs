@@ -1,5 +1,5 @@
 //! `lanshare receive`: runs the same service as the desktop app and answers its questions on the terminal: offers
-//! (unless `--yes`), pairing PINs, and progress for every incoming transfer.
+//! (unless `--yes`), pairing PINs, and progress for every incoming transfer. Texts from paired devices are printed.
 
 use std::sync::Arc;
 
@@ -79,6 +79,7 @@ fn handle(
         ServiceEvent::TransferComplete { id, path } => bars.complete(id, path.as_deref()),
         ServiceEvent::TransferFailed { id, error } => bars.fail(id, &error),
         ServiceEvent::ReceiveRefused { error } => output::print_receive_refused(&error),
+        ServiceEvent::TextReceived(text) => output::print_text_received(&text),
         ServiceEvent::PairingPin { peer, pin, .. } => output::print_pairing_pin(&peer, &pin),
         ServiceEvent::PairingResult { result: Ok(device), .. } => output::print_paired(&device),
         ServiceEvent::PairingResult { result: Err(error), .. } => output::print_pairing_failed(&error),

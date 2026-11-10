@@ -1,5 +1,5 @@
 //! Sending and receiving files in hashed chunks over parallel streams, with resume after a dropped connection,
-//! pause and a bandwidth limit.
+//! pause and a bandwidth limit; and short texts in a single message.
 //!
 //! Sender and receiver work on any [`Connection`](crate::transport::Connection), so the same code runs over QUIC and
 //! TCP.
@@ -17,6 +17,7 @@ mod retry;
 mod scheduler;
 mod sender;
 mod state;
+mod text;
 mod writer;
 
 use std::{
@@ -44,6 +45,7 @@ pub use retry::RETRY_WINDOW;
 pub use scheduler::{DEFAULT_STREAMS, MAX_STREAMS};
 pub use sender::{send_file, send_files, SendOptions};
 pub use state::{cleanup_stale_parts, PART_SUFFIX, STATE_SUFFIX};
+pub use text::{check_text, send_text, ReceivedText, MAX_TEXT_BYTES};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     time::timeout,

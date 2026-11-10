@@ -29,7 +29,8 @@
       "linux": "Linux"
     },
     "send_folder": "ផ្ញើថត…",
-    "pick_folder_title": "ជ្រើសរើសថតដើម្បីផ្ញើ"
+    "pick_folder_title": "ជ្រើសរើសថតដើម្បីផ្ញើ",
+    "send_text": "ផ្ញើអត្ថបទ…"
   },
   "transfers": {
     "title": "ការផ្ទេរ",
@@ -112,6 +113,24 @@
     "accept": "ទទួល",
     "decline": "បដិសេធ"
   },
+  "text": {
+    "send_title": "ផ្ញើអត្ថបទទៅ {device}",
+    "label": "អត្ថបទ",
+    "paste": "បិទភ្ជាប់",
+    "size": "{used} នៃ {max}",
+    "too_long": "អត្ថបទនេះវែងពេក។ សូមផ្ញើវាជាឯកសារជំនួសវិញ។",
+    "send": "ផ្ញើ",
+    "sending": "កំពុងផ្ញើ…",
+    "cancel": "បោះបង់",
+    "sent": "បានផ្ញើអត្ថបទទៅ {device}",
+    "clipboard_empty": "ក្ដារតម្បៀតខ្ទាស់មិនមានអត្ថបទទេ។",
+    "received_title": "បានទទួលអត្ថបទ",
+    "from": "ពី {device}",
+    "copy": "ចម្លង",
+    "copied": "បានចម្លងទៅក្ដារតម្បៀតខ្ទាស់",
+    "close": "បិទ",
+    "more": "{count, plural, other {អត្ថបទ # ទៀតកំពុងរង់ចាំ}}"
+  },
   "pairing": {
     "title": "ផ្គូផ្គងឧបករណ៍",
     "show_pin": "{device} ចង់ផ្គូផ្គងជាមួយឧបករណ៍នេះ។ វាយលេខ PIN នេះនៅលើឧបករណ៍នោះ៖",
@@ -134,7 +153,9 @@
     "offer_body": "{device} ចង់ផ្ញើ {file} ({size})។",
     "pairing_title": "សំណើផ្គូផ្គង",
     "pairing_body": "{device} ចង់ផ្គូផ្គង។ បើក LanShare ដើម្បីមើលលេខ PIN។",
-    "receive_refused_title": "មិនអាចទទួលការផ្ទេរបានទេ"
+    "receive_refused_title": "មិនអាចទទួលការផ្ទេរបានទេ",
+    "text_title": "បានទទួលអត្ថបទ",
+    "text_body": "{device} បានផ្ញើអត្ថបទមកអ្នក។ សូមបើក LanShare ដើម្បីមើលវា។"
   },
   "tray": {
     "open": "បើក LanShare",
@@ -169,6 +190,7 @@
     "PAIRING_LOCKED": "លេខ PIN ខុសច្រើនដងពេក។ សូមព្យាយាមម្តងទៀតក្នុងរយៈពេល {seconds} វិនាទី។",
     "BUSY": "{device} កំពុងរវល់។ សូមព្យាយាមម្តងទៀតបន្តិចទៀត។",
     "PERMISSION_DENIED": "មិនអាចរក្សាទុកទៅ {folder} បានទេ។ សូមជ្រើសរើសថតទាញយកផ្សេងនៅក្នុងការកំណត់។",
+    "TEXT_TOO_LONG": "អត្ថបទនេះវែងពេក។ អាចផ្ញើជាអត្ថបទបានយ៉ាងច្រើន {maxBytes}។ សូមផ្ញើវាជាឯកសារជំនួសវិញ។",
     "macos_local_network": "នៅលើ macOS សូមពិនិត្យផងដែរថា LanShare ត្រូវបានអនុញ្ញាតនៅក្នុង System Settings → Privacy & Security → Local Network។"
   }
 }

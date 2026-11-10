@@ -132,4 +132,10 @@ pub enum Message {
         /// Whether pairing succeeded.
         ok: bool,
     },
+    /// Sent instead of `Offer` to hand over a short text (version 7). The receiver answers `Done` once the text is
+    /// shown, or `Reject`.
+    TextOffer {
+        /// 1 to [`MAX_TEXT_BYTES`](crate::transfer::MAX_TEXT_BYTES) bytes of UTF-8.
+        text: String,
+    },
 }

@@ -79,6 +79,17 @@ lanshare trusted list                # paired devices
 lanshare trusted remove "Office PC"  # forget a device; it must pair again
 ```
 
+Short texts, such as a link or a password, go to paired devices without a prompt. The receiver prints them; the
+desktop app shows them with a **Copy** button (device card → **Send text…**, with **Paste** for the clipboard).
+
+```sh
+lanshare send-text "Office PC" "https://example.com"
+pbpaste | lanshare send-text "Office PC"   # macOS clipboard; standard input is read when no text is given
+```
+
+A text is at most 64 KiB and is never saved on either device. Devices running LanShare 1.0 cannot receive texts and
+answer with a version error; files still work between all 1.x versions.
+
 Compare fingerprints (`A1B2-C3D4-E5F6`) with `lanshare whoami` on the other device if you want to be sure which
 device you are pairing with.
 

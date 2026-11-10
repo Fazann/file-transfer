@@ -30,6 +30,7 @@ use super::{
     peer_error, read_exact_tracked,
     scheduler::MAX_STREAMS,
     state::{part_path, state_path, ResumeState},
+    text::{check_text, ReceivedText},
     writer::ChunkWriter,
     Progress, SAVE_EVERY_CHUNKS,
 };
@@ -37,7 +38,9 @@ use crate::{
     error::{Error, ErrorCode, Result},
     identity::{DeviceId, DeviceInfo, Fingerprint, TrustStore, TrustedDevice},
     pairing::{PairingAnswer, PairingLockout, PairingPeer},
-    protocol::{read_message, read_message_or_end, EntryResume, Message, OfferEntry, PROTOCOL_VERSION},
+    protocol::{
+        is_supported_version, read_message, read_message_or_end, EntryResume, Message, OfferEntry, PROTOCOL_VERSION,
+    },
     transport::{Connection, PeerSession, RecvHalf, HANDSHAKE_TIMEOUT},
 };
 
@@ -131,14 +134,16 @@ pub enum ReceiveOutcome {
     },
     /// The sender asked to pair, the PIN matched, and it is now trusted.
     Paired(TrustedDevice),
+    /// A paired device sent a text. Nothing was written to disk.
+    Text(ReceivedText),
 }
 
-/// Handles one incoming connection: a transfer saved into `download_dir`, a benchmark, or a pairing request.
+/// Handles one incoming connection: a transfer saved into `download_dir`, a text, a benchmark, or a pairing request.
 ///
 /// Senders are checked against `policy` right after their `Hello`: paired devices may offer files (accepted without
 /// asking if their `auto_accept` is on); unpaired ones are rejected with [`Error::UntrustedDevice`] unless
-/// `allow_untrusted` is on. A device whose id is paired with a different certificate gets
-/// [`Error::FingerprintMismatch`]. Any device may ask to pair.
+/// `allow_untrusted` is on. Texts are taken from paired devices only, whatever `allow_untrusted` says. A device whose
+/// id is paired with a different certificate gets [`Error::FingerprintMismatch`]. Any device may ask to pair.
 ///
 /// Data is written to `<name>.lanshare-part` with resume state in `<name>.lanshare-state`. If the transfer stops
 /// (error, dropped connection, or this future is dropped), both files are kept, and when the sender offers the same
@@ -215,6 +220,20 @@ impl<C: Connection, D: OfferDecider> Incoming<'_, C, D> {
             Ok(trusted) => trusted,
             Err(error) => return reject(writer, error).await,
         };
+        if let Message::TextOffer { text } = request {
+            // A text is shown without asking, so `allow_untrusted` does not cover it.
+            if trusted.is_none() {
+                info!(fingerprint = %session.fingerprint, "rejecting a text from an unpaired device");
+                return reject(writer, Error::UntrustedDevice).await;
+            }
+            if let Err(error) = check_text(&text) {
+                return reject(writer, error).await;
+            }
+            writer.send(&Message::Done).await?;
+            info!(device = %device_name, bytes = text.len(), "text received");
+            let fingerprint = session.fingerprint;
+            return Ok(ReceiveOutcome::Text(ReceivedText { device_id, device_name, fingerprint, text }));
+        }
         let offer = match check_offer(request, writer).await? {
             Request::Files(offer) => offer,
             Request::Bench { transfer_id, size } => {
@@ -344,7 +363,7 @@ async fn reject<T>(writer: &ControlWriter, error: Error) -> Result<T> {
     Err(error)
 }
 
-/// Reads `Hello` and checks the protocol version. Returns the sender's device id and name.
+/// Reads `Hello` and checks that its protocol version is one this device accepts. Returns the sender's device id and name.
 async fn read_hello<R>(recv: &mut R, writer: &ControlWriter) -> Result<(DeviceId, String)>
 where
     R: AsyncRead + Unpin,
@@ -355,7 +374,7 @@ where
         other => other?,
     };
     match message {
-        Message::Hello { protocol_version, device_id, device_name } if protocol_version == PROTOCOL_VERSION => {
+        Message::Hello { protocol_version, device_id, device_name } if is_supported_version(protocol_version) => {
             Ok((device_id, device_name))
         }
         Message::Hello { protocol_version, .. } => reject_version(writer, protocol_version).await,

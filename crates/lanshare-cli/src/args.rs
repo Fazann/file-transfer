@@ -24,6 +24,8 @@ pub enum Command {
     Receive(ReceiveArgs),
     /// Send files or folders to a device running `lanshare receive`.
     Send(SendArgs),
+    /// Send a short text, such as a link or a password, to a paired device running `lanshare receive`.
+    SendText(SendTextArgs),
     /// List devices on the network that are running `lanshare receive`.
     Devices,
     /// Measure throughput to a device running `lanshare receive`, with generated data and no disk access.
@@ -93,6 +95,21 @@ pub struct SendArgs {
     /// Bandwidth limit in MB/s; 0 means unlimited. Defaults to `bandwidth_limit_mbps` in config.toml.
     #[arg(long, value_name = "MB_PER_SECOND")]
     pub limit: Option<u32>,
+    /// Transport to use. `auto` tries QUIC and falls back to TCP.
+    #[arg(long, value_enum, default_value_t = TransportArg::Auto)]
+    pub transport: TransportArg,
+}
+
+/// Arguments for `lanshare send-text`.
+#[derive(Debug, Args)]
+pub struct SendTextArgs {
+    /// Name of the receiving device (see `lanshare devices`), or its IP address.
+    pub target: String,
+    /// The text, at most 64 KiB. Read from standard input when missing or `-`, without its final line break.
+    pub text: Option<String>,
+    /// Port the receiver listens on. Only used when the target is an IP address.
+    #[arg(long, default_value_t = DEFAULT_PORT)]
+    pub port: u16,
     /// Transport to use. `auto` tries QUIC and falls back to TCP.
     #[arg(long, value_enum, default_value_t = TransportArg::Auto)]
     pub transport: TransportArg,

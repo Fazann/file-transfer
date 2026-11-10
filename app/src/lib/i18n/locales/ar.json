@@ -29,7 +29,8 @@
       "linux": "Linux"
     },
     "send_folder": "إرسال مجلد…",
-    "pick_folder_title": "اختر مجلدًا لإرساله"
+    "pick_folder_title": "اختر مجلدًا لإرساله",
+    "send_text": "إرسال نص…"
   },
   "transfers": {
     "title": "عمليات النقل",
@@ -112,6 +113,24 @@
     "accept": "قبول",
     "decline": "رفض"
   },
+  "text": {
+    "send_title": "إرسال نص إلى {device}",
+    "label": "النص",
+    "paste": "لصق",
+    "size": "{used} من {max}",
+    "too_long": "هذا النص أطول من اللازم. أرسله كملف بدلًا من ذلك.",
+    "send": "إرسال",
+    "sending": "جارٍ الإرسال…",
+    "cancel": "إلغاء",
+    "sent": "تم إرسال النص إلى {device}",
+    "clipboard_empty": "لا تحتوي الحافظة على نص.",
+    "received_title": "تم استلام نص",
+    "from": "من {device}",
+    "copy": "نسخ",
+    "copied": "تم النسخ إلى الحافظة",
+    "close": "إغلاق",
+    "more": "{count, plural, zero {لا نصوص أخرى} one {نص آخر في الانتظار} two {نصان آخران في الانتظار} few {# نصوص أخرى في الانتظار} many {# نصًا آخر في الانتظار} other {# نص آخر في الانتظار}}"
+  },
   "pairing": {
     "title": "إقران الأجهزة",
     "show_pin": "يريد {device} الاقتران بهذا الجهاز. اكتب رمز PIN هذا على ذلك الجهاز:",
@@ -134,7 +153,9 @@
     "offer_body": "يريد {device} إرسال {file} ‏({size}).",
     "pairing_title": "طلب اقتران",
     "pairing_body": "يريد {device} الاقتران. افتح LanShare لرؤية رمز PIN.",
-    "receive_refused_title": "تعذّر استلام عملية نقل"
+    "receive_refused_title": "تعذّر استلام عملية نقل",
+    "text_title": "تم استلام نص",
+    "text_body": "أرسل إليك {device} نصًا. افتح LanShare لرؤيته."
   },
   "tray": {
     "open": "فتح LanShare",
@@ -169,6 +190,7 @@
     "PAIRING_LOCKED": "رموز PIN خاطئة كثيرة. حاول مجددًا بعد {seconds} ثانية.",
     "BUSY": "{device} مشغول. حاول مجددًا بعد قليل.",
     "PERMISSION_DENIED": "تعذّر الحفظ في {folder}. اختر مجلد تنزيل آخر من الإعدادات.",
+    "TEXT_TOO_LONG": "هذا النص أطول من اللازم. يمكن إرسال {maxBytes} كحد أقصى كنص؛ أرسله كملف بدلًا من ذلك.",
     "macos_local_network": "على macOS، تأكد أيضًا من السماح لـ LanShare في System Settings → Privacy & Security → Local Network."
   }
 }

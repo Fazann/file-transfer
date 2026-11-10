@@ -7,6 +7,7 @@
   import Card from '$lib/components/ui/Card.svelte';
   import Icon from '$lib/components/ui/Icon.svelte';
   import { pairWith, sendToPeer } from '$lib/stores/pairing';
+  import { openSendText } from '$lib/stores/texts';
 
   import type { Peer } from '$lib/types';
 
@@ -72,7 +73,10 @@
         {$_('devices.send_files')}
       </Button>
       <Button onclick={chooseFolderAndSend}>{$_('devices.send_folder')}</Button>
-      {#if !peer.trusted}
+      <!-- Texts go to paired devices only, so an unpaired one offers pairing instead. -->
+      {#if peer.trusted}
+        <Button onclick={() => openSendText(peer)}>{$_('devices.send_text')}</Button>
+      {:else}
         <Button onclick={pair}>{$_('devices.pair')}</Button>
       {/if}
     </div>

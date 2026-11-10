@@ -28,7 +28,7 @@ use super::{
 use crate::{
     error::{Error, Result},
     identity::DeviceInfo,
-    protocol::{read_message_or_end, Message, PROTOCOL_VERSION},
+    protocol::{read_message_or_end, Message, MIN_PROTOCOL_VERSION},
     transport::{Connection, RecvHalf, SendHalf},
 };
 
@@ -71,7 +71,7 @@ pub async fn run_bench<C: Connection>(
     let (send, mut recv) = connection.open_control().await?;
     let writer = ControlWriter::new(send);
     let hello =
-        Message::Hello { protocol_version: PROTOCOL_VERSION, device_id: local.id, device_name: local.name.clone() };
+        Message::Hello { protocol_version: MIN_PROTOCOL_VERSION, device_id: local.id, device_name: local.name.clone() };
     writer.send(&hello).await?;
     // A fresh id, so the TCP listener can tell this benchmark's data connections from any other transfer's.
     let transfer_id = Uuid::new_v4();

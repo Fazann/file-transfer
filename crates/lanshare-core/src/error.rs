@@ -67,10 +67,15 @@ pub enum ErrorCode {
         /// The folder that could not be written to, on the receiving device.
         folder: String,
     },
+    /// A text is longer than a text message may be.
+    TextTooLong {
+        /// The most bytes of UTF-8 a text may have.
+        max_bytes: u64,
+    },
 }
 
 /// The name of every [`ErrorCode`], in wire order. Frontends check that each one has a translation.
-pub const ERROR_CODE_NAMES: [&str; 17] = [
+pub const ERROR_CODE_NAMES: [&str; 18] = [
     "DECLINED",
     "VERSION_MISMATCH",
     "INVALID_FILE_NAME",
@@ -88,6 +93,7 @@ pub const ERROR_CODE_NAMES: [&str; 17] = [
     "PAIRING_LOCKED",
     "BUSY",
     "PERMISSION_DENIED",
+    "TEXT_TOO_LONG",
 ];
 
 impl ErrorCode {
@@ -114,6 +120,7 @@ impl ErrorCode {
             Self::PairingLocked { .. } => "PAIRING_LOCKED",
             Self::Busy => "BUSY",
             Self::PermissionDenied { .. } => "PERMISSION_DENIED",
+            Self::TextTooLong { .. } => "TEXT_TOO_LONG",
         }
     }
 }
@@ -194,6 +201,12 @@ pub enum Error {
         /// The folder that could not be written to.
         folder: String,
     },
+    /// A text is longer than a text message may be.
+    #[error("TEXT_TOO_LONG (at most {max_bytes} bytes)")]
+    TextTooLong {
+        /// The most bytes of UTF-8 a text may have.
+        max_bytes: u64,
+    },
     /// The peer reported an error that has no more specific local variant.
     #[error("PEER: {}", code.name())]
     Peer {
@@ -228,6 +241,7 @@ impl Error {
             }
             Self::Busy => ErrorCode::Busy,
             Self::PermissionDenied { folder } => ErrorCode::PermissionDenied { folder: folder.clone() },
+            Self::TextTooLong { max_bytes } => ErrorCode::TextTooLong { max_bytes: *max_bytes },
             Self::Peer { code } => code.clone(),
         }
     }
@@ -247,6 +261,7 @@ impl Error {
             ErrorCode::PairingLocked { retry_after_secs } => Self::PairingLocked { retry_after_secs },
             ErrorCode::Busy => Self::Busy,
             ErrorCode::PermissionDenied { folder } => Self::PermissionDenied { folder },
+            ErrorCode::TextTooLong { max_bytes } => Self::TextTooLong { max_bytes },
             code => Self::Peer { code },
         }
     }
@@ -279,7 +294,7 @@ impl From<io::Error> for Error {
 mod tests {
     use super::*;
 
-    const ALL_CODES: [ErrorCode; 17] = [
+    const ALL_CODES: [ErrorCode; 18] = [
         ErrorCode::Declined,
         ErrorCode::VersionMismatch { ours: 1, theirs: 2 },
         ErrorCode::InvalidFileName,
@@ -297,6 +312,7 @@ mod tests {
         ErrorCode::PairingLocked { retry_after_secs: 300 },
         ErrorCode::Busy,
         ErrorCode::PermissionDenied { folder: String::new() },
+        ErrorCode::TextTooLong { max_bytes: 65_536 },
     ];
 
     #[test]

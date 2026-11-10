@@ -13,7 +13,7 @@ use lanshare_core::{
     identity::{DeviceInfo, Os, TrustedDevice},
     pairing::{PairingPeer, LOCK_DURATION, PIN_ENTRY_TIMEOUT},
     service::{TransferId, TransferInfo},
-    transfer::{BenchResult, IncomingOffer, Progress},
+    transfer::{BenchResult, IncomingOffer, Progress, ReceivedText},
     transport::TransportKind,
     Error, ErrorCode,
 };
@@ -369,6 +369,18 @@ pub fn print_sent(files: &[PathBuf]) {
     println!("Sent {}", names.join(", "));
 }
 
+/// Printed after a text is sent.
+pub fn print_text_sent(device: &str) {
+    println!("Text sent to {}", printable(device));
+}
+
+/// Prints a received text between two marker lines, so it is clear where it starts and ends.
+pub fn print_text_received(text: &ReceivedText) {
+    println!("--- Text from {} ---", printable(&text.device_name));
+    println!("{}", printable_text(&text.text));
+    println!("--- End of text ---");
+}
+
 /// English text for an error code.
 pub fn error_text(code: &ErrorCode) -> String {
     match code {
@@ -411,6 +423,12 @@ pub fn error_text(code: &ErrorCode) -> String {
             LOCK_DURATION.as_secs() / 60
         ),
         ErrorCode::Busy => "The other device is busy with other connections. Try again in a moment.".to_owned(),
+        ErrorCode::TextTooLong { max_bytes } => {
+            format!(
+                "The text is too long: at most {} can be sent as text. Send it as a file instead.",
+                HumanBytes(*max_bytes)
+            )
+        }
         ErrorCode::PermissionDenied { folder } => {
             format!(
                 "Cannot save to {folder} on the receiving device. Choose another download folder there, with `--dir` \
@@ -442,6 +460,11 @@ fn printable(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
 
+/// Like [`printable`], but keeps line breaks and tabs, for texts of several lines.
+fn printable_text(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t')).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,6 +472,7 @@ mod tests {
     #[test]
     fn control_characters_are_removed() {
         assert_eq!(printable("evil\u{1b}[2Jname\n"), "evil[2Jname");
+        assert_eq!(printable_text("line 1\r\n\tline\u{1b}[2J 2"), "line 1\n\tline[2J 2");
     }
 
     #[test]

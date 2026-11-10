@@ -15,6 +15,7 @@
     close: 'M6 6l12 12M18 6L6 18',
     check: 'M5 12l5 5 9-10',
     folder: 'M3 6h6l2 2h10v11H3z',
+    clipboard: 'M9 3h6v4H9zM9 5H5v16h14V5h-4',
     shield: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z',
     upload: 'M12 16V4M7 9l5-5 5 5M4 20h16',
     trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3',

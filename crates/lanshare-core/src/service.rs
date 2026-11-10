@@ -30,8 +30,9 @@ use crate::{
     pairing::{self, PairingLockout, PairingPeer, PinPrompt, PIN_ENTRY_TIMEOUT},
     paths,
     transfer::{
-        cleanup_stale_parts, list_entries, progress_channel, receive_file, send_files, IncomingOffer, OfferDecider,
-        Progress, ReceiveOutcome, ReceivePolicy, SendOptions, TransferControl,
+        check_text, cleanup_stale_parts, list_entries, progress_channel, receive_file, send_files, send_text,
+        IncomingOffer, OfferDecider, Progress, ReceiveOutcome, ReceivePolicy, ReceivedText, SendOptions,
+        TransferControl,
     },
     transport::{self, AnyConnection, ConnectOptions, Listener, PeerCheck, TransportPreference},
 };
@@ -126,6 +127,8 @@ pub enum ServiceEvent {
         /// Why.
         error: ErrorCode,
     },
+    /// A paired device sent a text. Show it; it is not stored anywhere.
+    TextReceived(ReceivedText),
     /// Another device asks to pair: show `pin` to the user.
     PairingPin {
         /// The pairing.
@@ -293,6 +296,25 @@ impl LanShareService {
             inner.finish(id, result.map(|()| None));
         });
         Ok(id)
+    }
+
+    /// Sends `text` to the device `peer_id` and waits until that device has it. Texts are not transfers: they have
+    /// no id, progress or history, and the other device shows them without asking.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::TextTooLong`] or [`Error::ProtocolViolation`] (empty text) before connecting
+    /// - [`Error::PeerUnreachable`] if no device with this id is currently found, or none of its addresses answers
+    /// - [`Error::UntrustedDevice`] if the two devices are not paired; pair first with
+    ///   [`LanShareService::start_pairing`]
+    /// - [`Error::VersionMismatch`] if the other device is too old for text
+    pub async fn send_text(&self, peer_id: DeviceId, text: &str) -> Result<()> {
+        check_text(text)?;
+        let peer = self.find_peer(peer_id)?;
+        let inner = &self.inner;
+        let options = inner.connect_options(&peer, PeerCheck::Trusted(inner.trust.clone()));
+        let connection: AnyConnection = transport::connect_any(&peer.socket_addrs(), &options).await?;
+        send_text(&connection, &inner.local, text).await
     }
 
     /// Answers an [`ServiceEvent::IncomingOffer`]. Returns `false` if the offer is no longer waiting.
@@ -514,7 +536,7 @@ async fn forward_peers(inner: Arc<Inner>, mut events: mpsc::UnboundedReceiver<Pe
     }
 }
 
-/// Receives on one connection: an offer, a pairing request, or a benchmark.
+/// Receives on one connection: an offer, a text, a pairing request, or a benchmark.
 async fn handle_connection(inner: Arc<Inner>, connection: AnyConnection) {
     let id = inner.new_id();
     let control = TransferControl::default();
@@ -541,6 +563,10 @@ async fn handle_connection(inner: Arc<Inner>, connection: AnyConnection) {
             if let Some(request_id) = pairing {
                 inner.emit(ServiceEvent::PairingResult { request_id, result: Ok(device) });
             }
+        }
+        Ok(ReceiveOutcome::Text(text)) => {
+            lock(&inner.transfers).remove(&id);
+            inner.emit(ServiceEvent::TextReceived(text));
         }
         Ok(ReceiveOutcome::Declined(_) | ReceiveOutcome::Benchmark { .. }) => {
             lock(&inner.transfers).remove(&id);
