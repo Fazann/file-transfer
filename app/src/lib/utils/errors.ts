@@ -36,8 +36,32 @@ export function errorMessage(
     }
   }
   const message = translate(`errors.${error.code}`, { values });
-  // macOS gives no way to tell a refused permission from an unreachable device, so name it as a possible cause.
+  const diagnosis = connectDiagnosis(translate, error, values);
+  if (diagnosis) {
+    return `${message} ${diagnosis}`;
+  }
+  // Nothing was tried, so nothing says why. On macOS a missing permission is a likely cause, so name it.
   return LOCAL_NETWORK_CODES.includes(error.code) && isMacos()
     ? `${message} ${translate('errors.macos_local_network')}`
     : message;
+}
+
+/**
+ * Why a connection failed and what to do, from the `quic`, `tcp`, `port` and `hint` params the backend adds after
+ * trying to connect, e.g. "QUIC: timed out. TCP: no route to host. macOS is blocking…". Empty without them.
+ */
+function connectDiagnosis(translate: Translate, error: CommandError, values: Record<string, string | number>): string {
+  const parts: string[] = [];
+  for (const transport of ['quic', 'tcp']) {
+    const failure = error.params[transport];
+    if (typeof failure === 'string') {
+      const outcome = { failure: translate(`errors.connect.failure.${failure}`) };
+      parts.push(translate(`errors.connect.${transport}`, { values: outcome }));
+    }
+  }
+  const hint = error.params.hint;
+  if (typeof hint === 'string') {
+    parts.push(translate(`errors.connect.hint.${hint}`, { values }));
+  }
+  return parts.join(' ');
 }

@@ -5,12 +5,14 @@
 //! carry chunks from the sender to the receiver. Both transports use TLS 1.3 with a certificate on each side (see
 //! `tls.rs`).
 
+mod diagnosis;
 mod quic;
 mod tcp;
 mod tls;
 
 use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
+pub use diagnosis::{ConnectAttempt, ConnectDiagnosis, ConnectFailure, ConnectHint, ConnectReport};
 pub use quic::QuicConnection;
 pub use tcp::{TcpConnection, CONNECT_TIMEOUT, DEFAULT_PORT, PEER_ADDRESS_TIMEOUT};
 pub use tls::PeerCheck;
@@ -25,7 +27,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{Error, ErrorCode, Result},
-    identity::{DeviceCertificate, Fingerprint},
+    identity::{DeviceCertificate, Fingerprint, Os},
     protocol::{read_message, write_message, Message},
 };
 
@@ -75,6 +77,8 @@ pub struct ConnectOptions {
     /// The fingerprint discovery advertised for the receiver, if it was found that way. A different certificate
     /// fails with [`Error::FingerprintMismatch`].
     pub expected: Option<Fingerprint>,
+    /// The receiver's operating system, if discovery knew it. Only used for the hint of a failed connection.
+    pub peer_os: Option<Os>,
 }
 
 /// One connection between a sender and a receiver, over either transport.
@@ -182,9 +186,13 @@ impl Connection for AnyConnection {
 /// # Errors
 ///
 /// - [`Error::UntrustedDevice`] or [`Error::FingerprintMismatch`] if the receiver's certificate fails the check
-/// - [`Error::TransportUnavailable`] if no allowed transport connects
+/// - [`Error::TransportUnavailable`] if no allowed transport connects, with each attempt in its [`ConnectReport`]
 pub async fn connect(addr: SocketAddr, options: &ConnectOptions) -> Result<AnyConnection> {
-    connect_with_timeout(addr, options, CONNECT_TIMEOUT).await
+    let mut report = ConnectReport { attempts: Vec::new(), peer_os: options.peer_os };
+    match connect_with_timeout(addr, options, CONNECT_TIMEOUT, &mut report).await {
+        Err(Error::TransportUnavailable { .. }) => Err(Error::TransportUnavailable { report }),
+        result => result,
+    }
 }
 
 /// Tries each address of a discovered peer in order and returns the first connection.
@@ -195,16 +203,18 @@ pub async fn connect(addr: SocketAddr, options: &ConnectOptions) -> Result<AnyCo
 ///
 /// - [`Error::UntrustedDevice`] or [`Error::FingerprintMismatch`] as soon as an address answers with a certificate
 ///   that fails the check
-/// - [`Error::PeerUnreachable`] if no address accepts a connection (or `addrs` is empty)
+/// - [`Error::PeerUnreachable`] if no address accepts a connection (or `addrs` is empty), with every attempt in its
+///   [`ConnectReport`]
 pub async fn connect_any(addrs: &[SocketAddr], options: &ConnectOptions) -> Result<AnyConnection> {
+    let mut report = ConnectReport { attempts: Vec::new(), peer_os: options.peer_os };
     for addr in addrs {
-        match connect_with_timeout(*addr, options, PEER_ADDRESS_TIMEOUT).await {
+        match connect_with_timeout(*addr, options, PEER_ADDRESS_TIMEOUT, &mut report).await {
             Ok(connection) => return Ok(connection),
             Err(error) if is_certificate_refusal(&error) => return Err(error),
             Err(error) => debug!(%addr, %error, "address unreachable, trying the next one"),
         }
     }
-    Err(Error::PeerUnreachable)
+    Err(Error::PeerUnreachable { report })
 }
 
 /// A refused certificate is an answer, not an unreachable address: trying another transport would not change it.
@@ -212,10 +222,13 @@ fn is_certificate_refusal(error: &Error) -> bool {
     matches!(error, Error::UntrustedDevice | Error::FingerprintMismatch)
 }
 
+/// Tries the allowed transports on `addr`, adding each failure to `report`. Fails with a certificate refusal, or
+/// with an empty [`Error::TransportUnavailable`] whose attempts are in `report`.
 async fn connect_with_timeout(
     addr: SocketAddr,
     options: &ConnectOptions,
     tcp_timeout: Duration,
+    report: &mut ConnectReport,
 ) -> Result<AnyConnection> {
     let (certificate, check, expected) = (&options.certificate, &options.check, options.expected);
     if options.preference != TransportPreference::Tcp {
@@ -225,7 +238,10 @@ async fn connect_with_timeout(
                 return Ok(AnyConnection::Quic(connection));
             }
             Err(error) if is_certificate_refusal(&error) => return Err(error),
-            Err(error) => debug!(%addr, %error, "QUIC did not connect"),
+            Err(error) => {
+                debug!(%addr, %error, "QUIC did not connect");
+                report.push(addr, TransportKind::Quic, &error);
+            }
         }
     }
     if options.preference != TransportPreference::Quic {
@@ -235,10 +251,13 @@ async fn connect_with_timeout(
                 return Ok(AnyConnection::Tcp(connection));
             }
             Err(error) if is_certificate_refusal(&error) => return Err(error),
-            Err(error) => debug!(%addr, %error, "TCP did not connect"),
+            Err(error) => {
+                debug!(%addr, %error, "TCP did not connect");
+                report.push(addr, TransportKind::Tcp, &error);
+            }
         }
     }
-    Err(Error::TransportUnavailable)
+    Err(Error::TransportUnavailable { report: ConnectReport::default() })
 }
 
 /// The receiver's places for incoming connections, shared by the TCP and QUIC accept loops.
@@ -311,7 +330,8 @@ impl Listener {
                 Err(error) => last = Some((tcp_listener, port, error)),
             }
         }
-        let (tcp_listener, port, error) = last.ok_or(Error::TransportUnavailable)?;
+        let (tcp_listener, port, error) =
+            last.ok_or(Error::TransportUnavailable { report: ConnectReport::default() })?;
         warn!(port, %error, "QUIC is unavailable, accepting TCP only");
         Ok(Self::start(port, tcp_listener, certificate, None))
     }

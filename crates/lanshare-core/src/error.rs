@@ -8,6 +8,8 @@ use std::io;
 use serde::{Deserialize, Serialize};
 use thiserror::Error as ThisError;
 
+use crate::transport::{ConnectDiagnosis, ConnectReport};
+
 /// Shorthand for `std::result::Result<T, lanshare_core::Error>`.
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -160,9 +162,12 @@ pub enum Error {
     /// The transfer was cancelled.
     #[error("CANCELLED")]
     Cancelled,
-    /// None of the peer's addresses accepted a connection.
-    #[error("PEER_UNREACHABLE")]
-    PeerUnreachable,
+    /// None of the peer's addresses accepted a connection. The report is empty when the peer was not found at all.
+    #[error("PEER_UNREACHABLE ({report})")]
+    PeerUnreachable {
+        /// Every attempt and why it failed.
+        report: ConnectReport,
+    },
     /// Received data did not match its hash.
     #[error("HASH_MISMATCH")]
     HashMismatch,
@@ -175,8 +180,11 @@ pub enum Error {
         available: u64,
     },
     /// Neither QUIC nor TCP could connect to the address.
-    #[error("TRANSPORT_UNAVAILABLE")]
-    TransportUnavailable,
+    #[error("TRANSPORT_UNAVAILABLE ({report})")]
+    TransportUnavailable {
+        /// Every attempt and why it failed.
+        report: ConnectReport,
+    },
     /// The other device is not trusted.
     #[error("UNTRUSTED_DEVICE")]
     UntrustedDevice,
@@ -227,12 +235,12 @@ impl Error {
             Self::ProtocolViolation { .. } => ErrorCode::ProtocolViolation,
             Self::ConnectionLost => ErrorCode::ConnectionLost,
             Self::Cancelled => ErrorCode::Cancelled,
-            Self::PeerUnreachable => ErrorCode::PeerUnreachable,
+            Self::PeerUnreachable { .. } => ErrorCode::PeerUnreachable,
             Self::HashMismatch => ErrorCode::HashMismatch,
             Self::InsufficientSpace { needed, available } => {
                 ErrorCode::InsufficientSpace { needed: *needed, available: *available }
             }
-            Self::TransportUnavailable => ErrorCode::TransportUnavailable,
+            Self::TransportUnavailable { .. } => ErrorCode::TransportUnavailable,
             Self::UntrustedDevice => ErrorCode::UntrustedDevice,
             Self::FingerprintMismatch => ErrorCode::FingerprintMismatch,
             Self::PairingFailed => ErrorCode::PairingFailed,
@@ -243,6 +251,22 @@ impl Error {
             Self::PermissionDenied { folder } => ErrorCode::PermissionDenied { folder: folder.clone() },
             Self::TextTooLong { max_bytes } => ErrorCode::TextTooLong { max_bytes: *max_bytes },
             Self::Peer { code } => code.clone(),
+        }
+    }
+
+    /// [`Error::PeerUnreachable`] for a device that is not found, so nothing was attempted.
+    #[must_use]
+    pub fn peer_not_found() -> Self {
+        Self::PeerUnreachable { report: ConnectReport::default() }
+    }
+
+    /// Why a connection failed and what the user can do, for [`Error::PeerUnreachable`] and
+    /// [`Error::TransportUnavailable`] after at least one attempt.
+    #[must_use]
+    pub fn connect_diagnosis(&self) -> Option<ConnectDiagnosis> {
+        match self {
+            Self::PeerUnreachable { report } | Self::TransportUnavailable { report } => report.diagnose(),
+            _ => None,
         }
     }
 

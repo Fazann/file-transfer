@@ -29,8 +29,8 @@ use lanshare_core::{
         MAX_TEXT_BYTES,
     },
     transport::{
-        self, AnyConnection, ConnectOptions, Connection, Listener, PeerCheck, PeerSession, RecvHalf, SendHalf,
-        TransportKind, TransportPreference,
+        self, AnyConnection, ConnectFailure, ConnectHint, ConnectOptions, Connection, Listener, PeerCheck, PeerSession,
+        RecvHalf, SendHalf, TransportKind, TransportPreference,
     },
     Error, ErrorCode,
 };
@@ -112,6 +112,7 @@ fn connect_options(preference: TransportPreference) -> ConnectOptions {
         certificate: identities.sender.clone(),
         check: PeerCheck::Trusted(identities.sender_trust.clone()),
         expected: Some(identities.receiver.fingerprint()),
+        peer_os: None,
     }
 }
 
@@ -960,6 +961,12 @@ async fn nothing_listening_is_transport_unavailable() {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let error = transport::connect(addr, &connect_options(TransportPreference::Auto)).await.unwrap_err();
     assert_eq!(error.code(), ErrorCode::TransportUnavailable);
+    // Nothing listens on the TCP port, so the operating system answers right away; the hint follows from that.
+    let diagnosis = error.connect_diagnosis().expect("both attempts are reported");
+    assert!(diagnosis.quic.is_some());
+    assert_eq!(diagnosis.tcp, Some(ConnectFailure::Refused));
+    assert_eq!(diagnosis.port, port);
+    assert_eq!(diagnosis.hint, Some(ConnectHint::NotRunning));
 }
 
 // ---------------------------------------------------------------------------------------------------------------

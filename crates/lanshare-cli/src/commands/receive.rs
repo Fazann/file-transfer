@@ -79,7 +79,7 @@ fn handle(
         ServiceEvent::TransferStarted(info) if info.direction == Direction::Receive => bars.start(info),
         ServiceEvent::TransferProgress { id, progress, .. } => bars.update(id, progress),
         ServiceEvent::TransferComplete { id, path } => bars.complete(id, path.as_deref()),
-        ServiceEvent::TransferFailed { id, error } => bars.fail(id, &error),
+        ServiceEvent::TransferFailed { id, error, .. } => bars.fail(id, &error),
         ServiceEvent::ReceiveRefused { error } => output::print_receive_refused(&error),
         ServiceEvent::TextReceived(text) => output::print_text_received(&text),
         ServiceEvent::PairingPin { peer, pin, .. } => output::print_pairing_pin(&peer, &pin),

@@ -86,7 +86,7 @@ async fn pair(sender: &mut Node, receiver: &mut Node) {
     .unwrap();
     let result = sender
         .wait_for(|event| match event {
-            ServiceEvent::PairingResult { request_id, result } if request_id == request => Some(result),
+            ServiceEvent::PairingResult { request_id, result, .. } if request_id == request => Some(result),
             _ => None,
         })
         .await;
@@ -163,7 +163,7 @@ async fn a_read_only_download_folder_tells_both_devices() {
     assert_eq!(refused, expected);
     let failed = sender
         .wait_for(|event| match event {
-            ServiceEvent::TransferFailed { id, error } if id == sent => Some(error),
+            ServiceEvent::TransferFailed { id, error, .. } if id == sent => Some(error),
             _ => None,
         })
         .await;
@@ -201,7 +201,7 @@ async fn cancelling_stops_both_sides() {
     assert!(sender.service.cancel(id));
     let error = sender
         .wait_for(|event| match event {
-            ServiceEvent::TransferFailed { id: failed, error } if failed == id => Some(error),
+            ServiceEvent::TransferFailed { id: failed, error, .. } if failed == id => Some(error),
             _ => None,
         })
         .await;

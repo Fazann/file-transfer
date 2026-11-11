@@ -14,7 +14,7 @@ use lanshare_core::{
     pairing::{PairingPeer, LOCK_DURATION, PIN_ENTRY_TIMEOUT},
     service::{TransferId, TransferInfo},
     transfer::{BenchResult, IncomingOffer, Progress, ReceivedText},
-    transport::TransportKind,
+    transport::{ConnectDiagnosis, ConnectHint, TransportKind},
     Error, ErrorCode,
 };
 use tokio::{sync::watch, task::JoinHandle};
@@ -439,12 +439,58 @@ pub fn error_text(code: &ErrorCode) -> String {
     }
 }
 
-/// English text for an error, with the operating system's message added for I/O errors.
+/// English text for an error, with the operating system's message added for I/O errors, and why the connection
+/// failed plus what to do for a device that could not be reached.
 pub fn describe_error(error: &Error) -> String {
+    // The diagnosis says why and what to do, so the general advice of the code is left out.
+    if let Some(diagnosis) = error.connect_diagnosis() {
+        return format!("Could not connect to the device.\n{}", diagnosis_text(diagnosis));
+    }
     let text = error_text(&error.code());
     match error {
         Error::Io(io_error) => format!("{text} ({io_error})"),
         _ => text,
+    }
+}
+
+/// `  QUIC: timed out. TCP: no route to host.` and a hint line, if there is one.
+fn diagnosis_text(diagnosis: ConnectDiagnosis) -> String {
+    let mut lines = Vec::new();
+    let outcomes: Vec<String> = [("QUIC", diagnosis.quic), ("TCP", diagnosis.tcp)]
+        .into_iter()
+        .filter_map(|(transport, failure)| failure.map(|failure| format!("{transport}: {failure}.")))
+        .collect();
+    lines.push(format!("  {}", outcomes.join(" ")));
+    if let Some(hint) = diagnosis.hint {
+        lines.push(format!("  Hint: {}", hint_text(hint, diagnosis.port)));
+    }
+    lines.join("\n")
+}
+
+/// English text for what to do about a connection that failed.
+fn hint_text(hint: ConnectHint, port: u16) -> String {
+    match hint {
+        ConnectHint::MacosLocalNetwork => "macOS is blocking this app from reaching devices on your network. Turn \
+             it on under System Settings > Privacy & Security > Local Network: LanShare, or the terminal app you \
+             run `lanshare` from. Then quit and reopen that app."
+            .to_owned(),
+        ConnectHint::NoNetwork => "This device is not connected to a network. Connect to Wi-Fi or Ethernet.".to_owned(),
+        ConnectHint::NotRunning => {
+            format!("The other device refused port {port}. Check that LanShare is open and receiving there.")
+        }
+        ConnectHint::FirewallLinux => format!(
+            "A firewall on the other device may be blocking LanShare. With ufw, run there: \
+             sudo ufw allow {port}/tcp && sudo ufw allow {port}/udp"
+        ),
+        ConnectHint::FirewallWindows => "Windows Defender Firewall on the other device may be blocking LanShare. \
+             Allow LanShare on private networks there."
+            .to_owned(),
+        ConnectHint::FirewallMacos => "The macOS firewall on the other device may be blocking LanShare. Allow \
+             incoming connections for LanShare under System Settings > Network > Firewall there."
+            .to_owned(),
+        ConnectHint::Firewall => {
+            format!("A firewall on the other device may be blocking LanShare. Allow UDP and TCP port {port} there.")
+        }
     }
 }
 
@@ -468,6 +514,8 @@ fn printable_text(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use lanshare_core::transport::{ConnectAttempt, ConnectFailure, ConnectReport};
+
     use super::*;
 
     #[test]
@@ -492,5 +540,20 @@ mod tests {
     fn core_errors_get_english_text() {
         let error = user_facing_error(anyhow::Error::new(Error::Declined));
         assert_eq!(error.to_string(), "The receiver declined the file.");
+    }
+
+    #[test]
+    fn unreachable_devices_get_the_reason_and_a_hint() {
+        let addr = std::net::SocketAddr::from(([172, 20, 10, 3], 52000));
+        let attempts = vec![
+            ConnectAttempt { addr, transport: TransportKind::Quic, failure: ConnectFailure::TimedOut },
+            ConnectAttempt { addr, transport: TransportKind::Tcp, failure: ConnectFailure::Refused },
+        ];
+        let error = Error::PeerUnreachable { report: ConnectReport { attempts, peer_os: Some(Os::Linux) } };
+        assert_eq!(
+            describe_error(&error),
+            "Could not connect to the device.\n  QUIC: timed out. TCP: connection refused.\n  Hint: The other device \
+             refused port 52000. Check that LanShare is open and receiving there."
+        );
     }
 }

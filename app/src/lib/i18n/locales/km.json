@@ -196,6 +196,26 @@
     "BUSY": "{device} កំពុងរវល់។ សូមព្យាយាមម្តងទៀតបន្តិចទៀត។",
     "PERMISSION_DENIED": "មិនអាចរក្សាទុកទៅ {folder} បានទេ។ សូមជ្រើសរើសថតទាញយកផ្សេងនៅក្នុងការកំណត់។",
     "TEXT_TOO_LONG": "អត្ថបទនេះវែងពេក។ អាចផ្ញើជាអត្ថបទបានយ៉ាងច្រើន {maxBytes}។ សូមផ្ញើវាជាឯកសារជំនួសវិញ។",
-    "macos_local_network": "នៅលើ macOS សូមពិនិត្យផងដែរថា LanShare ត្រូវបានអនុញ្ញាតនៅក្នុង System Settings → Privacy & Security → Local Network។"
+    "macos_local_network": "នៅលើ macOS សូមពិនិត្យផងដែរថា LanShare ត្រូវបានអនុញ្ញាតនៅក្នុង System Settings → Privacy & Security → Local Network។",
+    "connect": {
+      "quic": "QUIC៖ {failure}។",
+      "tcp": "TCP៖ {failure}។",
+      "failure": {
+        "timedOut": "អស់ពេលរង់ចាំ",
+        "refused": "ការតភ្ជាប់ត្រូវបានបដិសេធ",
+        "noRoute": "គ្មានផ្លូវទៅកាន់ម៉ាស៊ីន",
+        "networkDown": "មិនអាចចូលដល់បណ្តាញ",
+        "other": "បរាជ័យ"
+      },
+      "hint": {
+        "macosLocalNetwork": "macOS កំពុងរារាំង LanShare មិនឲ្យភ្ជាប់ទៅឧបករណ៍នៅលើបណ្តាញនេះ។ សូមបើក LanShare នៅក្នុង System Settings → Privacy & Security → Local Network រួចបើក LanShare ឡើងវិញ។ បើដំណើរការពី terminal ឬកម្មវិធីកែកូដ សូមបើកកម្មវិធីនោះជំនួសវិញ។",
+        "noNetwork": "ឧបករណ៍នេះមិនបានភ្ជាប់បណ្តាញទេ។ សូមភ្ជាប់ Wi-Fi ឬ Ethernet ហើយព្យាយាមម្តងទៀត។",
+        "notRunning": "{device} បានបដិសេធច្រក {port}។ សូមប្រាកដថា LanShare កំពុងបើកនៅទីនោះ។",
+        "firewallLinux": "ជញ្ជាំងភ្លើងនៅលើ {device} ប្រហែលជាកំពុងរារាំង LanShare។ បើប្រើ ufw សូមដំណើរការនៅទីនោះ៖ sudo ufw allow {port}/tcp && sudo ufw allow {port}/udp",
+        "firewallWindows": "Windows Defender Firewall នៅលើ {device} ប្រហែលជាកំពុងរារាំង LanShare។ សូមអនុញ្ញាត LanShare លើបណ្តាញឯកជននៅទីនោះ។",
+        "firewallMacos": "ជញ្ជាំងភ្លើង macOS នៅលើ {device} ប្រហែលជាកំពុងរារាំង LanShare។ សូមអនុញ្ញាតការតភ្ជាប់ចូលសម្រាប់ LanShare នៅក្នុង System Settings → Network → Firewall នៅទីនោះ។",
+        "firewall": "ជញ្ជាំងភ្លើងនៅលើ {device} ប្រហែលជាកំពុងរារាំង LanShare។ សូមអនុញ្ញាតច្រក UDP និង TCP {port} នៅទីនោះ។"
+      }
+    }
   }
 }

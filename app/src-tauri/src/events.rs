@@ -284,10 +284,11 @@ impl Forwarder {
                 self.record(id, Status::Completed, None, path.clone());
                 self.emit("transfer-complete", CompletePayload { id, path });
             }
-            ServiceEvent::TransferFailed { id, error } => {
+            ServiceEvent::TransferFailed { id, error, diagnosis } => {
                 let status = if error == ErrorCode::Cancelled { Status::Cancelled } else { Status::Failed };
                 self.record(id, status, Some(error.name().to_owned()), None);
-                self.emit("transfer-failed", FailedPayload { id, error: CommandError::from(&error) });
+                let error = CommandError::from(&error).with_diagnosis(diagnosis.as_ref());
+                self.emit("transfer-failed", FailedPayload { id, error });
             }
             ServiceEvent::ReceiveRefused { error } => self.emit("receive-refused", CommandError::from(&error)),
             // Texts are not transfers: nothing to track, and never written to the history.
@@ -302,10 +303,10 @@ impl Forwarder {
             ServiceEvent::PairingPin { request_id, peer, pin } => {
                 self.emit("pairing-pin", PinPayload::new(request_id, &peer, pin));
             }
-            ServiceEvent::PairingResult { request_id, result } => {
+            ServiceEvent::PairingResult { request_id, result, diagnosis } => {
                 let (device, error) = match result {
                     Ok(device) => (Some(TrustedPayload::from(&device)), None),
-                    Err(code) => (None, Some(CommandError::from(&code))),
+                    Err(code) => (None, Some(CommandError::from(&code).with_diagnosis(diagnosis.as_ref()))),
                 };
                 self.emit("pairing-result", PairingResultPayload { request_id, device, error });
             }

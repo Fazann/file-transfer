@@ -196,6 +196,26 @@
     "BUSY": "{device} مشغول. حاول مجددًا بعد قليل.",
     "PERMISSION_DENIED": "تعذّر الحفظ في {folder}. اختر مجلد تنزيل آخر من الإعدادات.",
     "TEXT_TOO_LONG": "هذا النص أطول من اللازم. يمكن إرسال {maxBytes} كحد أقصى كنص؛ أرسله كملف بدلًا من ذلك.",
-    "macos_local_network": "على macOS، تأكد أيضًا من السماح لـ LanShare في System Settings → Privacy & Security → Local Network."
+    "macos_local_network": "على macOS، تأكد أيضًا من السماح لـ LanShare في System Settings → Privacy & Security → Local Network.",
+    "connect": {
+      "quic": "QUIC: {failure}.",
+      "tcp": "TCP: {failure}.",
+      "failure": {
+        "timedOut": "انتهت مهلة الانتظار",
+        "refused": "تم رفض الاتصال",
+        "noRoute": "لا يوجد مسار إلى الجهاز",
+        "networkDown": "الشبكة غير متاحة",
+        "other": "فشل"
+      },
+      "hint": {
+        "macosLocalNetwork": "يمنع macOS تطبيق LanShare من الوصول إلى الأجهزة على هذه الشبكة. فعّل LanShare من إعدادات النظام ← الخصوصية والأمان ← الشبكة المحلية، ثم أعد فتحه. إذا كنت تشغّله من الطرفية أو محرر الشيفرة، ففعّل ذلك التطبيق بدلاً منه.",
+        "noNetwork": "هذا الجهاز غير متصل بأي شبكة. اتصل بشبكة Wi-Fi أو Ethernet وحاول مرة أخرى.",
+        "notRunning": "رفض {device} المنفذ {port}. تأكد من أن LanShare مفتوح عليه.",
+        "firewallLinux": "قد يحظر جدار الحماية على {device} تطبيق LanShare. إذا كان يستخدم ufw، فشغّل عليه: sudo ufw allow {port}/tcp && sudo ufw allow {port}/udp",
+        "firewallWindows": "قد يحظر جدار حماية Windows Defender على {device} تطبيق LanShare. اسمح لـ LanShare على الشبكات الخاصة هناك.",
+        "firewallMacos": "قد يحظر جدار حماية macOS على {device} تطبيق LanShare. اسمح بالاتصالات الواردة لـ LanShare من إعدادات النظام ← الشبكة ← جدار الحماية هناك.",
+        "firewall": "قد يحظر جدار الحماية على {device} تطبيق LanShare. اسمح بمنفذي UDP و TCP رقم {port} هناك."
+      }
+    }
   }
 }

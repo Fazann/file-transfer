@@ -90,7 +90,7 @@ impl Device {
     }
 
     fn connect_options(&self, preference: TransportPreference, check: PeerCheck) -> ConnectOptions {
-        ConnectOptions { preference, certificate: self.certificate.clone(), check, expected: None }
+        ConnectOptions { preference, certificate: self.certificate.clone(), check, expected: None, peer_os: None }
     }
 
     fn trusted_check(&self) -> PeerCheck {

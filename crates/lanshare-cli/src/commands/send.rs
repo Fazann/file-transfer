@@ -7,7 +7,7 @@ use std::net::{IpAddr, SocketAddr};
 use anyhow::bail;
 use lanshare_core::{
     discovery::{Discovery, Peer, PeerEvent},
-    identity::Fingerprint,
+    identity::{Fingerprint, Os},
     paths,
     transfer::{progress_channel, send_files, SendOptions, TransferControl},
     transport::{self, AnyConnection, ConnectOptions, PeerCheck, TransportPreference},
@@ -76,6 +76,8 @@ pub(super) struct Destination {
     preference: TransportPreference,
     /// The fingerprint a discovered device advertised. A typed address has none to compare with.
     expected: Option<Fingerprint>,
+    /// The operating system a discovered device advertised, for the hint when connecting fails.
+    peer_os: Option<Os>,
 }
 
 impl Destination {
@@ -88,11 +90,17 @@ impl Destination {
     ) -> anyhow::Result<Self> {
         if let Ok(ip) = target.parse::<IpAddr>() {
             let addrs = vec![SocketAddr::new(ip, port)];
-            return Ok(Self { addrs, is_typed_address: true, preference, expected: None });
+            return Ok(Self { addrs, is_typed_address: true, preference, expected: None, peer_os: None });
         }
         let peer = find_by_name(target, context).await?;
         output::print_connecting(&peer, context.trust.get_by_fingerprint(&peer.fingerprint).is_some());
-        Ok(Self { addrs: peer.socket_addrs(), is_typed_address: false, preference, expected: Some(peer.fingerprint) })
+        Ok(Self {
+            addrs: peer.socket_addrs(),
+            is_typed_address: false,
+            preference,
+            expected: Some(peer.fingerprint),
+            peer_os: Some(peer.os),
+        })
     }
 
     /// Connects, checking the receiver's certificate as `check` says.
@@ -102,6 +110,7 @@ impl Destination {
             certificate: context.certificate.clone(),
             check,
             expected: self.expected,
+            peer_os: self.peer_os,
         };
         match self.addrs.as_slice() {
             [addr] if self.is_typed_address => transport::connect(*addr, &options).await,

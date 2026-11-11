@@ -27,6 +27,28 @@ describe('errorMessage', () => {
     expect(errorMessage(echo, error, 'en')).toBe('errors.PERMISSION_DENIED {"device":"","folder":"/data"}');
   });
 
+  it('adds why the connection failed and what to do', () => {
+    const error = {
+      code: 'PEER_UNREACHABLE',
+      params: { quic: 'timedOut', tcp: 'noRoute', port: 52000, hint: 'firewallLinux' },
+    };
+    expect(errorMessage(echo, error, 'en', { device: 'ubuntu' })).toBe(
+      'errors.PEER_UNREACHABLE {"device":"ubuntu","quic":"timedOut","tcp":"noRoute","port":52000,"hint":"firewallLinux"} ' +
+        'errors.connect.quic {"failure":"errors.connect.failure.timedOut {}"} ' +
+        'errors.connect.tcp {"failure":"errors.connect.failure.noRoute {}"} ' +
+        'errors.connect.hint.firewallLinux {"device":"ubuntu","quic":"timedOut","tcp":"noRoute","port":52000,' +
+        '"hint":"firewallLinux"}',
+    );
+  });
+
+  it('leaves out a transport that was not tried', () => {
+    const error = { code: 'TRANSPORT_UNAVAILABLE', params: { tcp: 'refused', port: 52000 } };
+    const message = errorMessage(echo, error, 'en');
+    expect(message).toContain('errors.connect.tcp');
+    expect(message).not.toContain('errors.connect.quic');
+    expect(message).not.toContain('errors.connect.hint');
+  });
+
   describe('on macOS', () => {
     afterEach(() => {
       vi.unstubAllGlobals();
@@ -38,6 +60,14 @@ describe('errorMessage', () => {
         'errors.macos_local_network',
       );
       expect(errorMessage(echo, { code: 'BUSY', params: {} }, 'en')).not.toContain('errors.macos_local_network');
+    });
+
+    it('uses the diagnosis instead of the general permission note when there is one', () => {
+      vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' });
+      const error = { code: 'PEER_UNREACHABLE', params: { tcp: 'noRoute', port: 52000, hint: 'macosLocalNetwork' } };
+      const message = errorMessage(echo, error, 'en');
+      expect(message).toContain('errors.connect.hint.macosLocalNetwork');
+      expect(message).not.toContain('errors.macos_local_network');
     });
   });
 });

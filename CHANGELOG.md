@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- When a device can't be reached, the error now says why for each transport (for example "QUIC: timed out. TCP: no
+  route to host.") and what to do: turn on Local Network for LanShare on macOS, open port 52000 in the other
+  device's firewall (with the `ufw` command on Linux), check that LanShare is open there, or connect to a network.
+  The same appears in the terminal for `lanshare send`, `send-text`, `pair` and `bench`.
 - Send a short text (a link, a password, a snippet) to a paired device: **Send text…** on a device card, with
   **Paste** from the clipboard, and **Copy** on the receiving side. `lanshare send-text` in the terminal, reading
   standard input when no text is given. Texts are never saved or logged.

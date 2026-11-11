@@ -31,7 +31,9 @@ only `ChunkHeader` frames, each followed by its chunk's raw bytes, repeated unti
 
 - The sender tries QUIC first. If the QUIC handshake does not finish within **3 seconds**, it connects over TCP
   instead. If neither works, it fails with `TRANSPORT_UNAVAILABLE` (or `PEER_UNREACHABLE` after trying every address
-  of a discovered device).
+  of a discovered device). These two errors also record why each attempt failed (timed out, refused, no route,
+  network down) and give the user a hint, such as the macOS Local Network permission or a firewall on the receiver.
+  This stays on the sending device: the error code is unchanged and nothing new goes on the wire.
 - The receiver listens on both. If the UDP port cannot be opened, it accepts TCP only.
 - TCP: after the TLS handshake, the receiver reads the first frame of every new TCP connection. `DataStreamHello`
   attaches the connection to the transfer with that `transfer_id`, but only for the control connection with the same

@@ -34,7 +34,7 @@ use crate::{
         send_text, IncomingOffer, OfferDecider, Progress, ReceiveOutcome, ReceivePolicy, ReceivedText, SendOptions,
         TransferControl,
     },
-    transport::{self, AnyConnection, ConnectOptions, Listener, PeerCheck, TransportPreference},
+    transport::{self, AnyConnection, ConnectDiagnosis, ConnectOptions, Listener, PeerCheck, TransportPreference},
 };
 
 /// How long an offer waits for the user before it is declined.
@@ -120,6 +120,8 @@ pub enum ServiceEvent {
         id: TransferId,
         /// Why.
         error: ErrorCode,
+        /// Why the other device could not be reached, if that is why it failed.
+        diagnosis: Option<ConnectDiagnosis>,
     },
     /// An offer was refused before it started because of a problem only the user of this device can fix, such as a
     /// download folder that is full or read-only.
@@ -147,6 +149,8 @@ pub enum ServiceEvent {
         request_id: RequestId,
         /// The newly trusted device, or why pairing failed.
         result: std::result::Result<TrustedDevice, ErrorCode>,
+        /// Why the other device could not be reached, if that is why pairing failed.
+        diagnosis: Option<ConnectDiagnosis>,
     },
 }
 
@@ -407,7 +411,9 @@ impl LanShareService {
             if let Err(error) = &result {
                 info!(%error, "pairing failed");
             }
-            inner.emit(ServiceEvent::PairingResult { request_id, result: result.map_err(|error| error.code()) });
+            let diagnosis = result.as_ref().err().and_then(Error::connect_diagnosis);
+            let result = result.map_err(|error| error.code());
+            inner.emit(ServiceEvent::PairingResult { request_id, result, diagnosis });
         });
         Ok(request_id)
     }
@@ -434,7 +440,7 @@ impl LanShareService {
     }
 
     fn find_peer(&self, peer_id: DeviceId) -> Result<Peer> {
-        self.peers().into_iter().find(|peer| peer.id == peer_id).ok_or(Error::PeerUnreachable)
+        self.peers().into_iter().find(|peer| peer.id == peer_id).ok_or_else(Error::peer_not_found)
     }
 
     fn with_transfer(&self, id: TransferId, action: impl FnOnce(&TransferControl)) -> bool {
@@ -466,7 +472,8 @@ impl Inner {
             Ok(path) => self.emit(ServiceEvent::TransferComplete { id, path }),
             Err(error) => {
                 info!(id, %error, "transfer failed");
-                self.emit(ServiceEvent::TransferFailed { id, error: error.code() });
+                let diagnosis = error.connect_diagnosis();
+                self.emit(ServiceEvent::TransferFailed { id, error: error.code(), diagnosis });
             }
         }
     }
@@ -477,6 +484,7 @@ impl Inner {
             certificate: self.certificate.clone(),
             check,
             expected: Some(peer.fingerprint),
+            peer_os: Some(peer.os),
         }
     }
 
@@ -611,7 +619,7 @@ async fn handle_connection(inner: Arc<Inner>, connection: AnyConnection) {
         Ok(ReceiveOutcome::Paired(device)) => {
             lock(&inner.transfers).remove(&id);
             if let Some(request_id) = pairing {
-                inner.emit(ServiceEvent::PairingResult { request_id, result: Ok(device) });
+                inner.emit(ServiceEvent::PairingResult { request_id, result: Ok(device), diagnosis: None });
             }
         }
         Ok(ReceiveOutcome::Text(text)) => {
@@ -629,7 +637,7 @@ async fn handle_connection(inner: Arc<Inner>, connection: AnyConnection) {
         Err(error) => {
             lock(&inner.transfers).remove(&id);
             if let Some(request_id) = pairing {
-                inner.emit(ServiceEvent::PairingResult { request_id, result: Err(error.code()) });
+                inner.emit(ServiceEvent::PairingResult { request_id, result: Err(error.code()), diagnosis: None });
             } else if matches!(error, Error::PermissionDenied { .. } | Error::InsufficientSpace { .. }) {
                 warn!(%error, "refused an incoming offer");
                 inner.emit(ServiceEvent::ReceiveRefused { error: error.code() });

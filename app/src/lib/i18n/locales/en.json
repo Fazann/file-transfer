@@ -196,6 +196,26 @@
     "BUSY": "{device} is busy. Try again in a moment.",
     "PERMISSION_DENIED": "Can't save to {folder}. Choose another download folder in Settings.",
     "TEXT_TOO_LONG": "This text is too long. At most {maxBytes} can be sent as text; send it as a file instead.",
-    "macos_local_network": "On macOS, also check that LanShare is allowed under System Settings → Privacy & Security → Local Network."
+    "macos_local_network": "On macOS, also check that LanShare is allowed under System Settings → Privacy & Security → Local Network.",
+    "connect": {
+      "quic": "QUIC: {failure}.",
+      "tcp": "TCP: {failure}.",
+      "failure": {
+        "timedOut": "timed out",
+        "refused": "connection refused",
+        "noRoute": "no route to host",
+        "networkDown": "network unreachable",
+        "other": "failed"
+      },
+      "hint": {
+        "macosLocalNetwork": "macOS is blocking LanShare from reaching devices on this network. Turn on LanShare under System Settings → Privacy & Security → Local Network, then reopen it. When running from a terminal or code editor, turn on that app instead.",
+        "noNetwork": "This device isn't connected to a network. Connect to Wi-Fi or Ethernet and try again.",
+        "notRunning": "{device} refused port {port}. Make sure LanShare is open there.",
+        "firewallLinux": "A firewall on {device} may be blocking LanShare. If it uses ufw, run there: sudo ufw allow {port}/tcp && sudo ufw allow {port}/udp",
+        "firewallWindows": "Windows Defender Firewall on {device} may be blocking LanShare. Allow LanShare on private networks there.",
+        "firewallMacos": "The macOS firewall on {device} may be blocking LanShare. Allow incoming connections for LanShare under System Settings → Network → Firewall there.",
+        "firewall": "A firewall on {device} may be blocking LanShare. Allow UDP and TCP port {port} there."
+      }
+    }
   }
 }
