@@ -13,6 +13,7 @@ use tauri::AppHandle;
 use tokio::sync::RwLock;
 
 use crate::{
+    clipboard::ClipboardSync,
     error::{CommandError, CommandResult},
     events,
     history::{History, HISTORY_FILE_NAME},
@@ -32,6 +33,8 @@ pub struct AppState {
     pub settings: Mutex<AppSettings>,
     /// Finished transfers.
     pub history: Arc<History>,
+    /// Clipboard sync with paired devices.
+    pub clipboard: ClipboardSync,
 }
 
 impl AppState {
@@ -59,6 +62,7 @@ impl AppState {
             config: Mutex::new(config),
             settings: Mutex::new(settings),
             history: Arc::new(history),
+            clipboard: ClipboardSync::default(),
         })
     }
 
@@ -109,6 +113,7 @@ async fn start_service(
         mdns: true,
         port: None,
         download_dir: None,
+        clipboard: true,
     };
     let (service, receiver) = LanShareService::start(options).await?;
     events::forward(app.clone(), service.clone(), receiver);

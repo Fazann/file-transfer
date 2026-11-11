@@ -46,7 +46,7 @@ pub use retry::RETRY_WINDOW;
 pub use scheduler::{DEFAULT_STREAMS, MAX_STREAMS};
 pub use sender::{send_file, send_files, SendOptions};
 pub use state::{cleanup_stale_parts, PART_SUFFIX, STATE_SUFFIX};
-pub use text::{check_text, send_text, ReceivedText, MAX_TEXT_BYTES};
+pub use text::{check_text, send_clipboard, send_text, ReceivedText, MAX_TEXT_BYTES};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     time::timeout,

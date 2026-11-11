@@ -145,9 +145,15 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_offer_is_variant_19() {
+        let payload = postcard::to_allocvec(&Message::ClipboardOffer { text: "hi".into() }).unwrap();
+        assert_eq!(payload, [19, 2, b'h', b'i']);
+    }
+
+    #[test]
     fn supported_hello_versions_do_not_count_as_a_mismatch() {
         // A `Hello` with trailing bytes this version cannot decode, but a version it accepts.
-        for (version, mismatch) in [(5, true), (6, false), (7, false), (8, true)] {
+        for (version, mismatch) in [(5, true), (6, false), (7, false), (8, false), (9, true)] {
             let error = decode_payload(&[0, version, 0xff]).unwrap_err();
             assert_eq!(matches!(error, Error::VersionMismatch { .. }), mismatch, "version {version}");
         }
@@ -176,6 +182,7 @@ mod tests {
             Message::BenchOffer { transfer_id: Uuid::new_v4(), size: 2_000_000_000 },
             Message::Error { code: ErrorCode::Io, detail: Some("disk full".into()) },
             Message::TextOffer { text: "https://example.com/ünïcode ✓".into() },
+            Message::ClipboardOffer { text: "copied ✓".into() },
         ];
         let (mut client, mut server) = duplex(64 * 1024);
         for message in &messages {

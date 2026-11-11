@@ -22,6 +22,8 @@ pub async fn run(args: ReceiveArgs, context: &Context) -> anyhow::Result<()> {
         mdns: context.use_mdns,
         port: args.port,
         download_dir: args.dir,
+        // The terminal has no clipboard to put texts on, so other devices' clipboards are declined.
+        clipboard: false,
     };
     let (service, mut events) = LanShareService::start(options).await?;
     if !service.quic_enabled() {
@@ -83,7 +85,10 @@ fn handle(
         ServiceEvent::PairingPin { peer, pin, .. } => output::print_pairing_pin(&peer, &pin),
         ServiceEvent::PairingResult { result: Ok(device), .. } => output::print_paired(&device),
         ServiceEvent::PairingResult { result: Err(error), .. } => output::print_pairing_failed(&error),
-        ServiceEvent::Peer(_) | ServiceEvent::OfferClosed { .. } | ServiceEvent::TransferStarted(_) => {}
+        ServiceEvent::Peer(_)
+        | ServiceEvent::OfferClosed { .. }
+        | ServiceEvent::TransferStarted(_)
+        | ServiceEvent::ClipboardReceived(_) => {}
     }
 }
 

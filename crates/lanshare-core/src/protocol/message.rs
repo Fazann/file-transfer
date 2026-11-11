@@ -138,4 +138,10 @@ pub enum Message {
         /// 1 to [`MAX_TEXT_BYTES`](crate::transfer::MAX_TEXT_BYTES) bytes of UTF-8.
         text: String,
     },
+    /// Like `TextOffer`, but the text came from the sender's clipboard and goes onto the receiver's (version 8). The
+    /// receiver takes it only from a paired device it syncs the clipboard with, and answers `Done` or `Reject`.
+    ClipboardOffer {
+        /// 1 to [`MAX_TEXT_BYTES`](crate::transfer::MAX_TEXT_BYTES) bytes of UTF-8.
+        text: String,
+    },
 }

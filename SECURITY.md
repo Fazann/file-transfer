@@ -72,6 +72,7 @@ name = "Office PC"
 fingerprint = "a1b2c3d4e5f6..."   # 64 hex digits
 paired_at = 1793145600            # seconds since 1970-01-01 UTC
 auto_accept = false
+sync_clipboard = false
 ```
 
 - Only the fingerprint matters for trust; `id` and `name` are what the device reported when it paired.
@@ -84,6 +85,11 @@ auto_accept = false
   be a password, so it is never written to disk or logs, never kept in the history, and never shown in a
   notification; the app forgets it once the dialog is closed. The terminal strips control characters from it, except
   line breaks and tabs.
+- **Clipboard sync** is off for every device until the user turns it on for that device, and a clipboard text is
+  accepted only from a paired device the receiver has turned it on for, so both sides must opt in. While it is on,
+  everything copied as text is sent, including passwords: password managers that mark their copies as private are not
+  recognized. The text follows the rules for texts above, and the app keeps only a keyed hash of the last one, to
+  notice new copies. While sync is off for every device, the app does not read the clipboard.
 - `lanshare trusted remove <device>` forgets a device. A running receiver re-reads the file before every check, so the
   device is refused at once and must pair again.
 

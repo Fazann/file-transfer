@@ -20,8 +20,8 @@ use lanshare_core::{
     pairing::{self, PairingLockout, PairingPeer, PinPrompt, MAX_FAILURES},
     protocol::{read_message, write_message, Message, PROTOCOL_VERSION},
     transfer::{
-        progress_channel, receive_file, send_file, send_text, IncomingOffer, OfferDecider, ReceiveOutcome,
-        ReceivePolicy, SendOptions, TransferControl,
+        progress_channel, receive_file, send_clipboard, send_file, send_text, IncomingOffer, OfferDecider,
+        ReceiveOutcome, ReceivePolicy, SendOptions, TransferControl,
     },
     transport::{
         self, AnyConnection, ConnectOptions, Connection, Listener, PeerCheck, TransportPreference,
@@ -158,6 +158,8 @@ impl PinPrompt for TypesPin {
 #[derive(Debug, Clone, Copy, Default)]
 struct Policy {
     allow_untrusted: bool,
+    /// Like `lanshare receive`, which has no clipboard.
+    no_clipboard: bool,
 }
 
 /// A listener for `device`, handling connections one at a time like `lanshare receive`.
@@ -176,6 +178,7 @@ impl Running {
             local: device.info.clone(),
             trust: device.trust.clone(),
             allow_untrusted: policy.allow_untrusted,
+            accept_clipboard: !policy.no_clipboard,
             lockout: Arc::new(PairingLockout::new()),
         };
         Self { addr, listener, policy, downloads: device.downloads() }
@@ -294,7 +297,7 @@ over_both_transports!(unpaired_sender_is_rejected: unpaired_sender_over_tcp, unp
 async fn allow_untrusted_asks_the_user() {
     let (sender, receiver) = (Device::new("Visitor"), Device::new("Desk"));
     sender.trust(&receiver).await;
-    let running = Running::start(&receiver, Policy { allow_untrusted: true }).await;
+    let running = Running::start(&receiver, Policy { allow_untrusted: true, ..Policy::default() }).await;
 
     let user = Receiver::new(true);
     let handled = running.receive_one(&user);
@@ -307,7 +310,7 @@ async fn allow_untrusted_asks_the_user() {
 async fn text_from_an_unpaired_device_is_rejected_even_with_allow_untrusted() {
     let (sender, receiver) = (Device::new("Visitor"), Device::new("Desk"));
     sender.trust(&receiver).await;
-    let running = Running::start(&receiver, Policy { allow_untrusted: true }).await;
+    let running = Running::start(&receiver, Policy { allow_untrusted: true, ..Policy::default() }).await;
 
     let user = Receiver::new(true);
     let handled = running.receive_one(&user);
@@ -317,6 +320,64 @@ async fn text_from_an_unpaired_device_is_rejected_even_with_allow_untrusted() {
     assert_eq!(error.code(), ErrorCode::UntrustedDevice);
     assert_eq!(handled.await.unwrap().unwrap_err().code(), ErrorCode::UntrustedDevice);
     assert!(!user.asked.load(Ordering::SeqCst));
+}
+
+/// Sends `text` from `sender`'s clipboard to the receiver running at `running`, returning both sides' results.
+async fn share_clipboard(
+    sender: &Device,
+    running: &Running,
+    text: &str,
+) -> (Result<(), Error>, Result<ReceiveOutcome, Error>) {
+    let handled = running.receive_one(&Receiver::new(false));
+    let options = sender.connect_options(TransportPreference::Quic, sender.trusted_check());
+    let connection = transport::connect(running.addr, &options).await.unwrap();
+    let sent = send_clipboard(&connection, &sender.info, text).await;
+    (sent, handled.await.unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clipboard_is_taken_only_once_the_receiver_syncs_with_the_sender() {
+    let (sender, receiver) = (Device::new("Laptop"), Device::new("Desk"));
+    sender.trust(&receiver).await;
+    receiver.trust(&sender).await;
+    let running = Running::start(&receiver, Policy::default()).await;
+
+    // Paired, but the receiver has not turned clipboard sync on for this sender.
+    let (sent, handled) = share_clipboard(&sender, &running, "copied").await;
+    assert_eq!(sent.unwrap_err().code(), ErrorCode::Declined);
+    assert_eq!(handled.unwrap_err().code(), ErrorCode::Declined);
+
+    receiver.trust.set_sync_clipboard(sender.info.id, true).await.unwrap();
+    let (sent, handled) = share_clipboard(&sender, &running, "copied").await;
+    sent.unwrap();
+    let ReceiveOutcome::Clipboard(got) = handled.unwrap() else { panic!("expected a clipboard text") };
+    assert_eq!(got.text, "copied");
+    assert_eq!(got.device_id, sender.info.id);
+    assert_eq!(got.fingerprint, sender.certificate.fingerprint());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clipboard_is_declined_by_a_receiver_without_a_clipboard() {
+    let (sender, receiver) = (Device::new("Laptop"), Device::new("Server"));
+    sender.trust(&receiver).await;
+    receiver.trust(&sender).await;
+    receiver.trust.set_sync_clipboard(sender.info.id, true).await.unwrap();
+    let running = Running::start(&receiver, Policy { no_clipboard: true, ..Policy::default() }).await;
+
+    let (sent, handled) = share_clipboard(&sender, &running, "copied").await;
+    assert_eq!(sent.unwrap_err().code(), ErrorCode::Declined);
+    assert_eq!(handled.unwrap_err().code(), ErrorCode::Declined);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clipboard_from_an_unpaired_device_is_rejected_even_with_allow_untrusted() {
+    let (sender, receiver) = (Device::new("Visitor"), Device::new("Desk"));
+    sender.trust(&receiver).await;
+    let running = Running::start(&receiver, Policy { allow_untrusted: true, ..Policy::default() }).await;
+
+    let (sent, handled) = share_clipboard(&sender, &running, "copied").await;
+    assert_eq!(sent.unwrap_err().code(), ErrorCode::UntrustedDevice);
+    assert_eq!(handled.unwrap_err().code(), ErrorCode::UntrustedDevice);
 }
 
 #[tokio::test(flavor = "multi_thread")]

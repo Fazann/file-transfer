@@ -1,13 +1,13 @@
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
 
-import { setTheme, updateSettings } from '$lib/api';
+import { listTrusted, setSyncClipboard, setTheme, updateSettings } from '$lib/api';
 import { setupI18n } from '$lib/i18n';
 import { setLocale } from '$lib/stores/locale';
 
 import App from './App.svelte';
 
-import type { Peer, SelfInfo, Settings } from '$lib/types';
+import type { Peer, SelfInfo, Settings, TrustedDevice } from '$lib/types';
 
 const settings: Settings = {
   deviceName: 'Laptop',
@@ -33,6 +33,8 @@ vi.mock('$lib/api', () => ({
   listTrusted: vi.fn(async () => []),
   updateSettings: vi.fn(async (next: Settings) => next),
   setTheme: vi.fn(async () => undefined),
+  setAutoAccept: vi.fn(async () => undefined),
+  setSyncClipboard: vi.fn(async () => undefined),
   setTrayLabels: vi.fn(async () => undefined),
   onEvent: vi.fn(async () => () => undefined),
   onFileDrop: vi.fn(async () => () => undefined),
@@ -99,6 +101,35 @@ describe('App', () => {
     document.querySelector('form')?.requestSubmit();
     await settle();
     expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ theme: 'light' }));
+    unmount(app);
+  });
+
+  it('turns clipboard sync on for a paired device', async () => {
+    const paired: TrustedDevice = {
+      id: 'desk',
+      name: 'Office Desk',
+      fingerprint: 'FFFF-0000-1111',
+      pairedAt: 0,
+      autoAccept: false,
+      syncClipboard: false,
+    };
+    vi.mocked(listTrusted).mockResolvedValue([paired]);
+    setupI18n('en');
+    const app = mount(App, { target: document.body });
+    await settle();
+    [...document.querySelectorAll('button')].find((button) => button.textContent.includes('Settings'))?.click();
+    await settle();
+
+    const label = [...document.querySelectorAll('label')].find((item) => item.textContent.includes('Sync clipboard'));
+    const checkbox = label?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    if (checkbox === null || checkbox === undefined) {
+      throw new Error('the sync clipboard checkbox is missing');
+    }
+    expect(checkbox.checked).toBe(false);
+    checkbox.click();
+    flushSync();
+    expect(setSyncClipboard).toHaveBeenCalledWith('desk', true);
+    vi.mocked(listTrusted).mockResolvedValue([]);
     unmount(app);
   });
 });

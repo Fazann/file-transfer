@@ -90,6 +90,9 @@
       startPairingEvents(pairingDone),
       startHistory(),
       onEvent('receive-refused', receiveRefused),
+      onEvent('clipboard-received', ({ deviceName }) =>
+        showToast($_('text.clipboard_received', { values: { device: deviceName } })),
+      ),
     ]);
     void startUpdateCheck();
   });

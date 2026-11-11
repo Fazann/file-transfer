@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { _, locale } from 'svelte-i18n';
 
-  import { listTrusted, removeTrusted, setAutoAccept } from '$lib/api';
+  import { listTrusted, removeTrusted, setAutoAccept, setSyncClipboard } from '$lib/api';
   import Button from '$lib/components/ui/Button.svelte';
   import Checkbox from '$lib/components/ui/Checkbox.svelte';
   import { markTrusted } from '$lib/stores/peers';
@@ -47,6 +47,12 @@
               label={$_('settings.auto_accept')}
               checked={device.autoAccept}
               onchange={(checked) => void setAutoAccept(device.id, checked)}
+            />
+            <Checkbox
+              label={$_('settings.sync_clipboard')}
+              description={$_('settings.sync_clipboard_hint')}
+              checked={device.syncClipboard}
+              onchange={(checked) => void setSyncClipboard(device.id, checked)}
             />
           </div>
           <Button variant="ghost" onclick={() => void remove(device)}>{$_('settings.remove')}</Button>

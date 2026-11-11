@@ -87,6 +87,10 @@ lanshare send-text "Office PC" "https://example.com"
 pbpaste | lanshare send-text "Office PC"   # macOS clipboard; standard input is read when no text is given
 ```
 
+In the desktop app, **Settings → Paired devices → Sync clipboard** shares the clipboard with a device: text copied on
+one shows up on the other's clipboard. Turn it on for each other on both devices. While it is on, everything you copy
+as text is sent, passwords included.
+
 A text is at most 64 KiB and is never saved on either device. Devices running LanShare 1.0 cannot receive texts and
 answer with a version error; files still work between all 1.x versions.
 

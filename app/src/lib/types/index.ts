@@ -39,6 +39,8 @@ export interface TrustedDevice {
   /** Milliseconds since 1970-01-01 UTC. */
   pairedAt: number;
   autoAccept: boolean;
+  /** Share the clipboard with it; it must turn this on for this device too. */
+  syncClipboard: boolean;
 }
 
 /** Event `incoming-offer`: another device offers a file. */
@@ -95,6 +97,11 @@ export interface ReceivedText {
   deviceName: string;
   fingerprint: string;
   text: string;
+}
+
+/** Event `clipboard-received`: a paired device's copy is now on the clipboard. The text is not sent to the window. */
+export interface ClipboardReceived {
+  deviceName: string;
 }
 
 /** The most bytes of UTF-8 one text may have, as `MAX_TEXT_BYTES` in `lanshare-core`. */

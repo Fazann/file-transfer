@@ -27,6 +27,8 @@ export const listTrusted = (): Promise<TrustedDevice[]> => invoke('list_trusted'
 export const removeTrusted = (id: string): Promise<void> => invoke('remove_trusted', { id });
 export const setAutoAccept = (id: string, autoAccept: boolean): Promise<void> =>
   invoke('set_auto_accept', { id, autoAccept });
+export const setSyncClipboard = (id: string, syncClipboard: boolean): Promise<void> =>
+  invoke('set_sync_clipboard', { id, syncClipboard });
 
 export const getSettings = (): Promise<Settings> => invoke('get_settings');
 export const updateSettings = (settings: Settings): Promise<Settings> => invoke('update_settings', { settings });

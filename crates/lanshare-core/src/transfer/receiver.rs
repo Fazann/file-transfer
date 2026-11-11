@@ -104,6 +104,9 @@ pub struct ReceivePolicy {
     pub trust: TrustStore,
     /// Let unpaired devices offer files (`allow_untrusted` in `config.toml`).
     pub allow_untrusted: bool,
+    /// This receiver can put texts on the clipboard (the desktop app; not the CLI). When off, every `ClipboardOffer`
+    /// is declined, whatever each device's `sync_clipboard` says.
+    pub accept_clipboard: bool,
     /// Failed pairing attempts, shared by every connection.
     pub lockout: Arc<PairingLockout>,
 }
@@ -136,13 +139,16 @@ pub enum ReceiveOutcome {
     Paired(TrustedDevice),
     /// A paired device sent a text. Nothing was written to disk.
     Text(ReceivedText),
+    /// A paired device this one syncs the clipboard with sent its clipboard text. Nothing was written to disk.
+    Clipboard(ReceivedText),
 }
 
 /// Handles one incoming connection: a transfer saved into `download_dir`, a text, a benchmark, or a pairing request.
 ///
 /// Senders are checked against `policy` right after their `Hello`: paired devices may offer files (accepted without
 /// asking if their `auto_accept` is on); unpaired ones are rejected with [`Error::UntrustedDevice`] unless
-/// `allow_untrusted` is on. Texts are taken from paired devices only, whatever `allow_untrusted` says. A device whose
+/// `allow_untrusted` is on. Texts are taken from paired devices only, whatever `allow_untrusted` says, and clipboard
+/// texts only from paired devices with `sync_clipboard` on, when `accept_clipboard` is on. A device whose
 /// id is paired with a different certificate gets [`Error::FingerprintMismatch`]. Any device may ask to pair.
 ///
 /// Data is written to `<name>.lanshare-part` with resume state in `<name>.lanshare-state`. If the transfer stops
@@ -233,6 +239,23 @@ impl<C: Connection, D: OfferDecider> Incoming<'_, C, D> {
             info!(device = %device_name, bytes = text.len(), "text received");
             let fingerprint = session.fingerprint;
             return Ok(ReceiveOutcome::Text(ReceivedText { device_id, device_name, fingerprint, text }));
+        }
+        if let Message::ClipboardOffer { text } = request {
+            let Some(trusted) = trusted else {
+                info!(fingerprint = %session.fingerprint, "rejecting a clipboard text from an unpaired device");
+                return reject(writer, Error::UntrustedDevice).await;
+            };
+            if !(self.policy.accept_clipboard && trusted.sync_clipboard) {
+                info!(device = %device_name, "declining a clipboard text: clipboard sync is off for this device");
+                return reject(writer, Error::Declined).await;
+            }
+            if let Err(error) = check_text(&text) {
+                return reject(writer, error).await;
+            }
+            writer.send(&Message::Done).await?;
+            info!(device = %device_name, bytes = text.len(), "clipboard text received");
+            let fingerprint = session.fingerprint;
+            return Ok(ReceiveOutcome::Clipboard(ReceivedText { device_id, device_name, fingerprint, text }));
         }
         let offer = match check_offer(request, writer).await? {
             Request::Files(offer) => offer,

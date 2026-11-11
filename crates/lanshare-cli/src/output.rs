@@ -203,8 +203,9 @@ pub fn print_trusted(devices: &[TrustedDevice]) {
     }
     for device in devices {
         let auto_accept = if device.auto_accept { "  auto-accept" } else { "" };
+        let sync_clipboard = if device.sync_clipboard { "  clipboard-sync" } else { "" };
         println!(
-            "{}  fingerprint {}  paired {}{auto_accept}",
+            "{}  fingerprint {}  paired {}{auto_accept}{sync_clipboard}",
             printable(&device.name),
             device.fingerprint,
             utc_date(device.paired_at)

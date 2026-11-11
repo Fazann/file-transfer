@@ -35,14 +35,18 @@ pub struct TrustedDevice {
     /// Accept its transfers without asking. Off unless the user turns it on.
     #[serde(default)]
     pub auto_accept: bool,
+    /// Share the clipboard with it: text copied here is sent there, and its clipboard texts are put on this one's.
+    /// Off unless the user turns it on; both devices must turn it on for each other.
+    #[serde(default)]
+    pub sync_clipboard: bool,
 }
 
 impl TrustedDevice {
-    /// A device paired just now, with `auto_accept` off.
+    /// A device paired just now, with `auto_accept` and `sync_clipboard` off.
     #[must_use]
     pub fn paired_now(id: DeviceId, name: String, fingerprint: Fingerprint) -> Self {
         let paired_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-        Self { id, name, fingerprint, paired_at, auto_accept: false }
+        Self { id, name, fingerprint, paired_at, auto_accept: false, sync_clipboard: false }
     }
 }
 
@@ -150,6 +154,20 @@ impl TrustStore {
         .await
     }
 
+    /// Turns `sync_clipboard` on or off for the device with this id and saves. Returns whether it was there.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] if the file cannot be written.
+    pub async fn set_sync_clipboard(&self, id: DeviceId, sync_clipboard: bool) -> Result<bool> {
+        self.change(move |devices| {
+            let Some(device) = devices.iter_mut().find(|known| known.id == id) else { return false };
+            device.sync_clipboard = sync_clipboard;
+            true
+        })
+        .await
+    }
+
     /// Re-reads the file if another process changed it since it was last read or written.
     ///
     /// # Errors
@@ -250,10 +268,13 @@ mod tests {
         let desk = device("Desk", 1);
         store.add(desk.clone()).await.unwrap();
         assert!(store.set_auto_accept(desk.id, true).await.unwrap());
+        assert!(store.set_sync_clipboard(desk.id, true).await.unwrap());
+        assert!(!store.set_sync_clipboard(DeviceId::new_random(), true).await.unwrap());
         let reopened = TrustStore::open_at(&path).unwrap();
         let saved = reopened.get_by_fingerprint(&desk.fingerprint).unwrap();
         assert_eq!(saved.name, "Desk");
         assert!(saved.auto_accept);
+        assert!(saved.sync_clipboard);
         assert_eq!(reopened.get_by_id(desk.id), Some(saved));
 
         assert!(reopened.remove(desk.id).await.unwrap());

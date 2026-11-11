@@ -18,12 +18,13 @@ use lanshare_core::{
     ErrorCode,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
     error::CommandError,
     history::{History, HistoryEntry, Status},
+    state::AppState,
 };
 
 /// Most progress events per second for one transfer.
@@ -72,6 +73,8 @@ pub struct TrustedPayload {
     pub paired_at: u64,
     /// Accept its files without asking.
     pub auto_accept: bool,
+    /// Share the clipboard with it.
+    pub sync_clipboard: bool,
 }
 
 impl From<&TrustedDevice> for TrustedPayload {
@@ -82,6 +85,7 @@ impl From<&TrustedDevice> for TrustedPayload {
             fingerprint: device.fingerprint.short(),
             paired_at: device.paired_at.saturating_mul(1000),
             auto_accept: device.auto_accept,
+            sync_clipboard: device.sync_clipboard,
         }
     }
 }
@@ -186,6 +190,13 @@ impl From<ReceivedText> for TextPayload {
     }
 }
 
+/// Who put a text on the clipboard. The text itself stays out of the window.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardPayload {
+    device_name: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PinPayload {
@@ -281,6 +292,13 @@ impl Forwarder {
             ServiceEvent::ReceiveRefused { error } => self.emit("receive-refused", CommandError::from(&error)),
             // Texts are not transfers: nothing to track, and never written to the history.
             ServiceEvent::TextReceived(text) => self.emit("text-received", TextPayload::from(text)),
+            // Straight onto the clipboard; the window only hears who sent it, never the text.
+            ServiceEvent::ClipboardReceived(text) => {
+                if let Some(state) = self.app.try_state::<AppState>() {
+                    state.clipboard.write(&self.app, text.text);
+                    self.emit("clipboard-received", ClipboardPayload { device_name: text.device_name });
+                }
+            }
             ServiceEvent::PairingPin { request_id, peer, pin } => {
                 self.emit("pairing-pin", PinPayload::new(request_id, &peer, pin));
             }

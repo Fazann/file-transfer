@@ -48,3 +48,14 @@ pub async fn set_auto_accept(state: State<'_, AppState>, id: String, auto_accept
         Err(CommandError::from(&ErrorCode::UntrustedDevice))
     }
 }
+
+/// Turns clipboard sync on or off for a paired device. Texts copied on either device reach the other only when both
+/// have it on for each other.
+#[tauri::command]
+pub async fn set_sync_clipboard(state: State<'_, AppState>, id: String, sync_clipboard: bool) -> CommandResult<()> {
+    if state.trust.set_sync_clipboard(device_id(&id)?, sync_clipboard).await? {
+        Ok(())
+    } else {
+        Err(CommandError::from(&ErrorCode::UntrustedDevice))
+    }
+}

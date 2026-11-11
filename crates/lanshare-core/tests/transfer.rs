@@ -129,6 +129,7 @@ fn receiver_policy() -> ReceivePolicy {
         local,
         trust: identities.receiver_trust.clone(),
         allow_untrusted: false,
+        accept_clipboard: true,
         lockout: Arc::new(PairingLockout::new()),
     }
 }
@@ -1184,8 +1185,8 @@ async fn text_too_long_is_refused_by_the_receiver() {
 }
 
 #[tokio::test]
-async fn hello_versions_six_and_seven_are_accepted() {
-    for version in [MIN_PROTOCOL_VERSION, PROTOCOL_VERSION] {
+async fn hello_versions_six_to_eight_are_accepted() {
+    for version in MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION {
         let (_source_dir, download_dir, _cache_dir) = dirs();
         let (listener, addr) = local_listener().await;
         let receiver = spawn_receiver(listener, download_dir.path().to_owned(), true);

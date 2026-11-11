@@ -1,7 +1,8 @@
 # LanShare Protocol
 
-Current version: **7** (`PROTOCOL_VERSION` in `crates/lanshare-core/src/protocol/mod.rs`). Version 7 is version 6
-plus [texts](#texts); devices speak both (see [Versions](#versions)).
+Current version: **8** (`PROTOCOL_VERSION` in `crates/lanshare-core/src/protocol/mod.rs`). Version 7 is version 6
+plus [texts](#texts), and version 8 adds [clipboard sync](#clipboard-sync); devices speak all three (see
+[Versions](#versions)).
 
 **Version 6 is frozen for the 1.x releases.** Later changes must stay compatible with it, or increase the version
 deliberately and be recorded in the [changelog](#changelog) below.
@@ -90,6 +91,7 @@ Chunk data is **not** framed: each `ChunkHeader` frame is followed by exactly `l
 | 16 | `PairConfirm` | `mac: [u8; 32]` | both | Proof of the shared key |
 | 17 | `PairResult` | `ok: bool` | both | End of pairing |
 | 18 | `TextOffer` | `text: String` | sender | Sent instead of `Offer` to hand over a short text (v7) |
+| 19 | `ClipboardOffer` | `text: String` | sender | Sent instead of `Offer` to put a text on the receiver's clipboard (v8) |
 
 `Hello` is also sent by the **receiver**, once, as its answer to `PairRequest` (see [Pairing](#pairing)).
 
@@ -108,11 +110,12 @@ Structs, with fields in wire order:
 
 ### Versions
 
-A device accepts a `Hello` whose `protocol_version` is from **6** (`MIN_PROTOCOL_VERSION`) to **7**
+A device accepts a `Hello` whose `protocol_version` is from **6** (`MIN_PROTOCOL_VERSION`) to **8**
 (`PROTOCOL_VERSION`), and answers any other with `Reject { VERSION_MISMATCH }`. A sender announces the **lowest**
-version that has every message it will send: `7` before a `TextOffer`, `6` for files, benchmarks and pairing, and the
-receiver's own `Hello` during pairing is `6` too. So a 1.0 device (version 6 only) still exchanges files and pairs
-with a newer one, and refuses a text with `VERSION_MISMATCH` instead of failing on a message it cannot decode.
+version that has every message it will send: `8` before a `ClipboardOffer`, `7` before a `TextOffer`, `6` for files,
+benchmarks and pairing, and the receiver's own `Hello` during pairing is `6` too. So a 1.0 device (version 6 only)
+still exchanges files and pairs with a newer one, and refuses a text with `VERSION_MISMATCH` instead of failing on a
+message it cannot decode; likewise a version 7 device refuses clipboard texts.
 Discovery advertises `PROTOCOL_VERSION`, the newest version a device speaks.
 
 `Hello` stays variant `0`, and `protocol_version` stays its first field, in every future version. A receiver that
@@ -249,6 +252,29 @@ Sender                                         Receiver
 - Nothing is written to disk and nothing is logged but the size. The desktop app keeps the text only until the user
   closes it, and leaves it out of the history and out of notifications.
 - There are no data streams, no resume and no retry: if the connection drops, the user sends again.
+
+### Clipboard sync
+
+`ClipboardOffer { text }` replaces `Offer`, after a `Hello` with version 8. It carries a text just copied on the
+sender, for the receiver to put on its clipboard:
+
+```
+Sender                                         Receiver
+  |---- Hello { 8, device_id, name } ----------->|
+  |---- ClipboardOffer { text } ----------------->|  sender not paired?               -> Reject { UNTRUSTED_DEVICE }
+  |                                               |  sync off for it, or no clipboard? -> Reject { DECLINED }
+  |                                               |  too long or empty?               -> as for TextOffer
+  |<------------------------------------- Done ---|  the text is on the clipboard
+ close                                          close
+```
+
+- The rules for `text` are those of `TextOffer`: 1 to 65,536 bytes of UTF-8, never written to disk or logged.
+- The receiver takes it only from a paired device whose `sync_clipboard` is on in its own trust store, so both users
+  must turn sync on for each other before anything moves. `lanshare receive` has no clipboard and declines every one.
+- The desktop app reads its clipboard every 750 ms while some paired device has sync on, and nothing at all
+  otherwise. A new text goes to every such device currently found, each over its own connection. Whatever was on the
+  clipboard when sync was turned on is not sent, and a text put there by another device is not sent back.
+- Syncing is best effort: a device that refuses or cannot be reached is skipped until the next copy.
 
 ### Receiver rules
 
@@ -447,6 +473,11 @@ The peer's address is the datagram's source address. Datagrams without the magic
 ignored.
 
 ## Changelog
+
+### v8
+- New message `ClipboardOffer { text }` (19), with the same limits as `TextOffer`. Receivers take it only from paired
+  devices they sync the clipboard with, decline it otherwise, and answer `Done`.
+- Receivers accept `Hello` versions 6 to 8. Senders announce 8 only before a `ClipboardOffer`.
 
 ### v7
 - New message `TextOffer { text }` (18), sent instead of `Offer` to hand over 1 to 65,536 bytes of text. Receivers

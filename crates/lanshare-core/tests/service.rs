@@ -41,6 +41,7 @@ impl Node {
             mdns: true,
             port: None,
             download_dir: None,
+            clipboard: true,
         };
         let (service, events) = LanShareService::start(options).await.unwrap();
         Self { service, events, dir }

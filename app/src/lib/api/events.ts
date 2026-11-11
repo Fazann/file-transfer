@@ -4,6 +4,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 
 import type {
+  ClipboardReceived,
   CommandError,
   IncomingOffer,
   PairingPin,
@@ -29,6 +30,7 @@ export interface EventPayloads {
   'transfer-failed': TransferFailed;
   'receive-refused': CommandError;
   'text-received': ReceivedText;
+  'clipboard-received': ClipboardReceived;
   'pairing-pin': PairingPin;
   'pairing-result': PairingResult;
 }

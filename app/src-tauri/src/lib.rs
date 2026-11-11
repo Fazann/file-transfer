@@ -3,6 +3,7 @@
 //! The window is a Svelte frontend (`app/src`); everything it does goes through the commands in `commands/`, and
 //! everything the service reports comes back as events from `events.rs`.
 
+mod clipboard;
 mod commands;
 mod diagnostics;
 mod error;
@@ -73,6 +74,7 @@ pub fn run() -> tauri::Result<()> {
             // Created here, not from the config, because a window opened first would start in the system's theme.
             let theme = lock(&state.settings).theme;
             app.manage(state);
+            clipboard::watch(handle.clone());
             WebviewWindowBuilder::from_config(&handle, &app.config().app.windows[0])?.theme(theme).build()?;
             tray::create(&handle)?;
             Ok(())
@@ -105,6 +107,7 @@ pub fn run() -> tauri::Result<()> {
             commands::pairing::list_trusted,
             commands::pairing::remove_trusted,
             commands::pairing::set_auto_accept,
+            commands::pairing::set_sync_clipboard,
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::settings::set_tray_labels,

@@ -18,7 +18,7 @@ use std::{
 
 use tokio::{
     sync::{mpsc, oneshot, watch},
-    task::JoinHandle,
+    task::{JoinHandle, JoinSet},
 };
 use tracing::{debug, info, warn};
 
@@ -30,8 +30,8 @@ use crate::{
     pairing::{self, PairingLockout, PairingPeer, PinPrompt, PIN_ENTRY_TIMEOUT},
     paths,
     transfer::{
-        check_text, cleanup_stale_parts, list_entries, progress_channel, receive_file, send_files, send_text,
-        IncomingOffer, OfferDecider, Progress, ReceiveOutcome, ReceivePolicy, ReceivedText, SendOptions,
+        check_text, cleanup_stale_parts, list_entries, progress_channel, receive_file, send_clipboard, send_files,
+        send_text, IncomingOffer, OfferDecider, Progress, ReceiveOutcome, ReceivePolicy, ReceivedText, SendOptions,
         TransferControl,
     },
     transport::{self, AnyConnection, ConnectOptions, Listener, PeerCheck, TransportPreference},
@@ -129,6 +129,9 @@ pub enum ServiceEvent {
     },
     /// A paired device sent a text. Show it; it is not stored anywhere.
     TextReceived(ReceivedText),
+    /// A paired device this one syncs the clipboard with copied a text: put it on the clipboard. It is not stored
+    /// anywhere else.
+    ClipboardReceived(ReceivedText),
     /// Another device asks to pair: show `pin` to the user.
     PairingPin {
         /// The pairing.
@@ -162,6 +165,9 @@ pub struct ServiceOptions {
     pub port: Option<u16>,
     /// Overrides `config.download_dir`.
     pub download_dir: Option<PathBuf>,
+    /// Accept clipboard texts from paired devices with `sync_clipboard` on, reported as
+    /// [`ServiceEvent::ClipboardReceived`]. Only a frontend that can write the clipboard turns this on.
+    pub clipboard: bool,
 }
 
 /// Discovery, the receiver and all transfers of this device.
@@ -179,6 +185,7 @@ struct Inner {
     download_dir: PathBuf,
     quic_enabled: bool,
     settings: Mutex<Config>,
+    clipboard: bool,
     lockout: Arc<PairingLockout>,
     events: mpsc::UnboundedSender<ServiceEvent>,
     discovery: Mutex<Option<Discovery>>,
@@ -222,6 +229,7 @@ impl LanShareService {
             download_dir,
             quic_enabled: listener.quic_enabled(),
             settings: Mutex::new(config),
+            clipboard: options.clipboard,
             lockout: Arc::new(PairingLockout::new()),
             events,
             discovery: Mutex::new(Some(discovery)),
@@ -267,7 +275,8 @@ impl LanShareService {
         lock(&self.inner.discovery).as_ref().map(Discovery::peers).unwrap_or_default()
     }
 
-    /// Applies settings that take effect without a restart: streams and chunk size (for new transfers), bandwidth limit (also for running transfers)
+    /// Applies settings that take effect without a restart: streams and chunk size (for new transfers), bandwidth limit
+    /// (also for running transfers)
     /// and `allow_untrusted`. Device name, port and download folder need a new service.
     pub fn update_settings(&self, config: Config) {
         let limit = config.bandwidth_limit_mbps;
@@ -315,6 +324,43 @@ impl LanShareService {
         let options = inner.connect_options(&peer, PeerCheck::Trusted(inner.trust.clone()));
         let connection: AnyConnection = transport::connect_any(&peer.socket_addrs(), &options).await?;
         send_text(&connection, &inner.local, text).await
+    }
+
+    /// Puts `text`, just copied on this device, on the clipboard of every paired device found right now that has
+    /// `sync_clipboard` on, all at once. Returns how many have it. Devices that refuse or cannot be reached are
+    /// skipped: syncing is best effort, and the next copy tries again.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::TextTooLong`] or [`Error::ProtocolViolation`] (empty text) before connecting to any device.
+    pub async fn share_clipboard(&self, text: &str) -> Result<usize> {
+        check_text(text)?;
+        let targets: Vec<Peer> = self
+            .peers()
+            .into_iter()
+            .filter(|peer| self.inner.trust.get_by_id(peer.id).is_some_and(|device| device.sync_clipboard))
+            .collect();
+        let text: Arc<str> = Arc::from(text);
+        let mut sends = JoinSet::new();
+        for peer in targets {
+            let (inner, text) = (Arc::clone(&self.inner), Arc::clone(&text));
+            sends.spawn(async move {
+                let options = inner.connect_options(&peer, PeerCheck::Trusted(inner.trust.clone()));
+                let result = match transport::connect_any(&peer.socket_addrs(), &options).await {
+                    Ok(connection) => send_clipboard(&connection, &inner.local, &text).await,
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = &result {
+                    debug!(device = %peer.name, %error, "clipboard not shared with this device");
+                }
+                result.is_ok()
+            });
+        }
+        let mut delivered = 0;
+        while let Some(result) = sends.join_next().await {
+            delivered += usize::from(result.unwrap_or(false));
+        }
+        Ok(delivered)
     }
 
     /// Answers an [`ServiceEvent::IncomingOffer`]. Returns `false` if the offer is no longer waiting.
@@ -550,6 +596,7 @@ async fn handle_connection(inner: Arc<Inner>, connection: AnyConnection) {
         local: inner.local.clone(),
         trust: inner.trust.clone(),
         allow_untrusted: lock(&inner.settings).allow_untrusted,
+        accept_clipboard: inner.clipboard,
         lockout: Arc::clone(&inner.lockout),
     };
     let (progress, watcher) = progress_channel();
@@ -570,6 +617,10 @@ async fn handle_connection(inner: Arc<Inner>, connection: AnyConnection) {
         Ok(ReceiveOutcome::Text(text)) => {
             lock(&inner.transfers).remove(&id);
             inner.emit(ServiceEvent::TextReceived(text));
+        }
+        Ok(ReceiveOutcome::Clipboard(text)) => {
+            lock(&inner.transfers).remove(&id);
+            inner.emit(ServiceEvent::ClipboardReceived(text));
         }
         Ok(ReceiveOutcome::Declined(_) | ReceiveOutcome::Benchmark { .. }) => {
             lock(&inner.transfers).remove(&id);
