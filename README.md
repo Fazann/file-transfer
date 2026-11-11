@@ -137,6 +137,7 @@ The first run creates `config.toml`, shared by the CLI and (later) the desktop a
 | `udp_fallback` | `true` | Also discover over UDP broadcast, for networks that block mDNS |
 | `stale_part_days` | `7` | Delete unfinished transfers older than this many days when `receive` starts |
 | `streams` | `4` | Parallel data streams per outgoing transfer, 1 to 16 |
+| `chunk_size_mib` | `8` | Chunk size in MiB for outgoing transfers, 1 to 64. Each chunk is hashed and resent whole if lost |
 | `bandwidth_limit_mbps` | `0` | Outgoing limit in MB/s (1 MB = 1,000,000 bytes); `0` means unlimited |
 | `allow_untrusted` | `false` | Let unpaired devices offer files (you are still asked). Traffic is encrypted either way |
 

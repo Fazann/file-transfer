@@ -5,11 +5,20 @@ use std::{fs::File, io, ops::Range};
 
 use crate::error::{Error, Result};
 
+/// One mebibyte, the unit the chunk size setting uses.
+const MIB: u32 = 1024 * 1024;
+
 /// Chunk size the sender offers (8 MiB). It travels in the offer, so it can change without a protocol change.
-pub const DEFAULT_CHUNK_SIZE: u32 = 8 * 1024 * 1024;
+pub const DEFAULT_CHUNK_SIZE: u32 = DEFAULT_CHUNK_SIZE_MIB * MIB;
+
+/// [`DEFAULT_CHUNK_SIZE`] in MiB, the default of the `chunk_size_mib` setting.
+pub const DEFAULT_CHUNK_SIZE_MIB: u32 = 8;
 
 /// Largest chunk size a receiver accepts (64 MiB). Bounds the memory one chunk may take.
-pub const MAX_CHUNK_SIZE: u32 = 64 * 1024 * 1024;
+pub const MAX_CHUNK_SIZE: u32 = MAX_CHUNK_SIZE_MIB * MIB;
+
+/// [`MAX_CHUNK_SIZE`] in MiB, the largest value of the `chunk_size_mib` setting.
+pub const MAX_CHUNK_SIZE_MIB: u32 = 64;
 
 /// Most chunks one entry may have. Keeps the resume bitset (512 KiB) well inside one frame.
 pub const MAX_CHUNK_COUNT: u64 = 4 * 1024 * 1024;

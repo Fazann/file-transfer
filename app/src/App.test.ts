@@ -14,6 +14,7 @@ const settings: Settings = {
   downloadDir: '/Users/me/Downloads/LanShare',
   port: 52000,
   streams: 4,
+  chunkSizeMib: 8,
   bandwidthLimitMbps: 0,
   allowUntrusted: false,
   language: 'en',

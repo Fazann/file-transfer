@@ -145,6 +145,7 @@ export interface Settings {
   downloadDir: string;
   port: number;
   streams: number;
+  chunkSizeMib: number;
   bandwidthLimitMbps: number;
   allowUntrusted: boolean;
   language: Locale | null;

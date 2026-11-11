@@ -7,6 +7,7 @@
   standard input when no text is given. Texts are never saved or logged.
 - Wire protocol version 7 adds `TextOffer`. Version 6 devices (LanShare 1.0) still send and receive files with this
   version; only texts need both devices updated.
+- Chunk size for outgoing transfers, 1 to 64 MiB, in Settings and as `chunk_size_mib` in `config.toml`.
 - Fixed: the light theme stayed dark on Linux desktops with a dark GTK theme, such as Ubuntu's.
 
 ## v1.0.0

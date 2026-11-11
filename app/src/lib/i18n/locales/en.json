@@ -86,6 +86,8 @@
     "port": "Port",
     "streams": "Parallel streams",
     "streams_hint": "1 to 16. More can help on fast networks.",
+    "chunk_size": "Chunk size (MiB)",
+    "chunk_size_hint": "1 to 64. Larger can be faster; smaller resends less after a dropped connection.",
     "bandwidth_limit": "Upload limit (MB/s)",
     "bandwidth_hint": "0 means no limit.",
     "allow_untrusted": "Allow devices that are not paired",

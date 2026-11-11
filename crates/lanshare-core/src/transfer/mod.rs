@@ -31,7 +31,8 @@ use std::{
 
 pub use bench::{run_bench, BenchResult};
 pub use chunk::{
-    chunk_count, hash_chunk, root_hash, ChunkHash, ChunkLayout, DEFAULT_CHUNK_SIZE, MAX_CHUNK_COUNT, MAX_CHUNK_SIZE,
+    chunk_count, hash_chunk, root_hash, ChunkHash, ChunkLayout, DEFAULT_CHUNK_SIZE, DEFAULT_CHUNK_SIZE_MIB,
+    MAX_CHUNK_COUNT, MAX_CHUNK_SIZE, MAX_CHUNK_SIZE_MIB,
 };
 pub(crate) use control::ControlWriter;
 pub use control::TransferControl;

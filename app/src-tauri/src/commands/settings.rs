@@ -23,6 +23,7 @@ pub struct SettingsPayload {
     download_dir: String,
     port: u16,
     streams: usize,
+    chunk_size_mib: u32,
     bandwidth_limit_mbps: u32,
     allow_untrusted: bool,
     language: Option<String>,
@@ -41,6 +42,7 @@ pub fn get_settings(state: State<'_, AppState>) -> SettingsPayload {
         download_dir: config.download_dir.display().to_string(),
         port: config.port,
         streams: config.streams,
+        chunk_size_mib: config.chunk_size_mib,
         bandwidth_limit_mbps: config.bandwidth_limit_mbps,
         allow_untrusted: config.allow_untrusted,
         language: settings.language,
@@ -64,6 +66,7 @@ pub async fn update_settings(
     config.download_dir = PathBuf::from(&settings.download_dir);
     config.port = settings.port;
     config.streams = settings.streams.clamp(1, lanshare_core::transfer::MAX_STREAMS);
+    config.chunk_size_mib = settings.chunk_size_mib.clamp(1, lanshare_core::transfer::MAX_CHUNK_SIZE_MIB);
     config.bandwidth_limit_mbps = settings.bandwidth_limit_mbps;
     config.allow_untrusted = settings.allow_untrusted;
     let needs_restart =

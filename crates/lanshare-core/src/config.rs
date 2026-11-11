@@ -14,7 +14,7 @@ use crate::{
     identity::{DeviceId, DeviceInfo, Fingerprint, Os},
     paths,
     protocol::PROTOCOL_VERSION,
-    transfer::{DEFAULT_STREAMS, MAX_STREAMS},
+    transfer::{DEFAULT_CHUNK_SIZE_MIB, DEFAULT_STREAMS, MAX_CHUNK_SIZE_MIB, MAX_STREAMS},
     transport::DEFAULT_PORT,
 };
 
@@ -25,7 +25,7 @@ pub const CONFIG_FILE_NAME: &str = "config.toml";
 const MAX_DEVICE_NAME_BYTES: usize = 200;
 
 /// Keys every saved config contains. If one is missing, the file is rewritten with the default filled in.
-const KEYS: [&str; 9] = [
+const KEYS: [&str; 10] = [
     "device_id",
     "device_name",
     "port",
@@ -33,6 +33,7 @@ const KEYS: [&str; 9] = [
     "udp_fallback",
     "stale_part_days",
     "streams",
+    "chunk_size_mib",
     "bandwidth_limit_mbps",
     "allow_untrusted",
 ];
@@ -59,6 +60,9 @@ pub struct Config {
     pub stale_part_days: u32,
     /// Parallel data streams per outgoing transfer, 1 to 16. Values outside that range are clamped when loading.
     pub streams: usize,
+    /// Chunk size for outgoing transfers in MiB, 1 to 64. Values outside that range are clamped when loading.
+    /// Larger chunks mean less overhead per chunk; smaller ones lose less work when a connection drops.
+    pub chunk_size_mib: u32,
     /// Bandwidth limit for outgoing transfers in MB/s (1 MB = 1,000,000 bytes). `0` means unlimited.
     pub bandwidth_limit_mbps: u32,
     /// Let devices that are not paired offer files (the user is still asked). Off by default: unpaired devices are
@@ -76,6 +80,7 @@ impl Default for Config {
             udp_fallback: true,
             stale_part_days: 7,
             streams: DEFAULT_STREAMS,
+            chunk_size_mib: DEFAULT_CHUNK_SIZE_MIB,
             bandwidth_limit_mbps: 0,
             allow_untrusted: false,
         }
@@ -115,6 +120,7 @@ impl Config {
         };
         config.device_name = clean_device_name(&config.device_name);
         config.streams = config.streams.clamp(1, MAX_STREAMS);
+        config.chunk_size_mib = config.chunk_size_mib.clamp(1, MAX_CHUNK_SIZE_MIB);
         if needs_save {
             config.save_at(path)?;
         }
@@ -139,6 +145,12 @@ impl Config {
     #[must_use]
     pub fn stale_part_age(&self) -> Duration {
         Duration::from_secs(u64::from(self.stale_part_days) * 24 * 60 * 60)
+    }
+
+    /// [`Config::chunk_size_mib`] in bytes, as [`SendOptions::chunk_size`](crate::transfer::SendOptions) takes it.
+    #[must_use]
+    pub fn chunk_size(&self) -> u32 {
+        self.chunk_size_mib.clamp(1, MAX_CHUNK_SIZE_MIB) * 1024 * 1024
     }
 
     /// What this device announces on the network, with the fingerprint of its certificate.
@@ -211,6 +223,8 @@ mod tests {
         assert!(created.udp_fallback);
         assert_eq!(created.stale_part_days, 7);
         assert_eq!(created.streams, 4);
+        assert_eq!(created.chunk_size_mib, 8);
+        assert_eq!(created.chunk_size(), crate::transfer::DEFAULT_CHUNK_SIZE);
         assert_eq!(created.bandwidth_limit_mbps, 0);
         assert!(!created.allow_untrusted);
         assert!(created.download_dir.ends_with("LanShare"));
@@ -247,6 +261,16 @@ mod tests {
         assert_eq!(Config::load_or_create_at(&path).unwrap().streams, MAX_STREAMS);
         fs::write(&path, "streams = 0\n").unwrap();
         assert_eq!(Config::load_or_create_at(&path).unwrap().streams, 1);
+    }
+
+    #[test]
+    fn chunk_size_is_clamped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        fs::write(&path, "chunk_size_mib = 999\n").unwrap();
+        assert_eq!(Config::load_or_create_at(&path).unwrap().chunk_size(), crate::transfer::MAX_CHUNK_SIZE);
+        fs::write(&path, "chunk_size_mib = 0\n").unwrap();
+        assert_eq!(Config::load_or_create_at(&path).unwrap().chunk_size_mib, 1);
     }
 
     #[test]

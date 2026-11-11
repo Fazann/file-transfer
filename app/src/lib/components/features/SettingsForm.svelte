@@ -89,6 +89,7 @@
         ...draft,
         port: Number(draft.port),
         streams: Number(draft.streams),
+        chunkSizeMib: Number(draft.chunkSizeMib),
         bandwidthLimitMbps: Number(draft.bandwidthLimitMbps),
         language: isLocale(language) ? language : null,
         theme: isTheme(theme) ? theme : null,
@@ -158,6 +159,16 @@
           label={$_('settings.streams')}
           hint={$_('settings.streams_hint')}
           bind:value={draft.streams}
+        />
+        <Input
+          id="chunk-size"
+          type="number"
+          min={1}
+          max={64}
+          dir="ltr"
+          label={$_('settings.chunk_size')}
+          hint={$_('settings.chunk_size_hint')}
+          bind:value={draft.chunkSizeMib}
         />
         <Input
           id="limit"

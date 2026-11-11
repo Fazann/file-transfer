@@ -30,6 +30,7 @@ pub async fn run(args: SendArgs, context: &Context) -> anyhow::Result<()> {
     // `paths` creates the directory with blocking `std::fs`, so it runs on the blocking pool.
     let mut options = SendOptions::new(tokio::task::spawn_blocking(paths::hash_cache_dir).await??);
     options.streams = args.streams.map_or(context.config.streams, usize::from);
+    options.chunk_size = context.config.chunk_size();
     let control = TransferControl::new(args.limit.unwrap_or(context.config.bandwidth_limit_mbps));
 
     match send_once(&args, context, &destination, &options, &control).await {

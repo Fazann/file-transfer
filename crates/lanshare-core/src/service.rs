@@ -267,7 +267,7 @@ impl LanShareService {
         lock(&self.inner.discovery).as_ref().map(Discovery::peers).unwrap_or_default()
     }
 
-    /// Applies settings that take effect without a restart: streams, bandwidth limit (also for running transfers)
+    /// Applies settings that take effect without a restart: streams and chunk size (for new transfers), bandwidth limit (also for running transfers)
     /// and `allow_untrusted`. Device name, port and download folder need a new service.
     pub fn update_settings(&self, config: Config) {
         let limit = config.bandwidth_limit_mbps;
@@ -478,11 +478,14 @@ async fn send_all(
         size: entries.iter().map(|(_, size)| size).sum(),
         entry_names: entries.into_iter().map(|(name, _)| name).collect(),
     }));
-    let streams = lock(&inner.settings).streams;
+    let (streams, chunk_size) = {
+        let settings = lock(&inner.settings);
+        (settings.streams, settings.chunk_size())
+    };
     let hash_cache = tokio::task::spawn_blocking(paths::hash_cache_dir)
         .await
         .map_err(|error| Error::Io(std::io::Error::other(error)))??;
-    let options = SendOptions { streams, ..SendOptions::new(hash_cache) };
+    let options = SendOptions { chunk_size, streams, ..SendOptions::new(hash_cache) };
     let connect_options = inner.connect_options(peer, PeerCheck::Trusted(inner.trust.clone()));
     let addrs: Vec<SocketAddr> = peer.socket_addrs();
     let connect = || transport::connect_any(&addrs, &connect_options);
