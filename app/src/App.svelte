@@ -19,6 +19,7 @@
   import { startPeers } from '$lib/stores/peers';
   import { loadSettings } from '$lib/stores/settings';
   import { startTexts } from '$lib/stores/texts';
+  import { applyTheme } from '$lib/stores/theme';
   import { showToast } from '$lib/stores/toasts';
   import { activeCount, startTransfers } from '$lib/stores/transfers';
   import { startUpdateCheck } from '$lib/stores/update';
@@ -80,6 +81,7 @@
   onMount(async () => {
     const settings = await loadSettings();
     setLocale(settings.language ?? systemLocale());
+    applyTheme(settings.theme);
     await Promise.all([
       startPeers(),
       startTransfers(),

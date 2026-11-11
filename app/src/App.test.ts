@@ -88,10 +88,13 @@ describe('App', () => {
     };
     choose('dark');
     expect(setTheme).toHaveBeenLastCalledWith('dark');
+    expect(document.documentElement.dataset.theme).toBe('dark');
     choose('system');
     expect(setTheme).toHaveBeenLastCalledWith(null);
+    expect(document.documentElement.dataset.theme).toBeUndefined();
 
     choose('light');
+    expect(document.documentElement.dataset.theme).toBe('light');
     document.querySelector('form')?.requestSubmit();
     await settle();
     expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ theme: 'light' }));

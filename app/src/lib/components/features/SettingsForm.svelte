@@ -1,7 +1,7 @@
 <script lang="ts">
   import { _, locale as i18nLocale } from 'svelte-i18n';
 
-  import { exportDiagnostics, pickFolder, pickSavePath, setTheme } from '$lib/api';
+  import { exportDiagnostics, pickFolder, pickSavePath } from '$lib/api';
   import Button from '$lib/components/ui/Button.svelte';
   import Checkbox from '$lib/components/ui/Checkbox.svelte';
   import Input from '$lib/components/ui/Input.svelte';
@@ -10,6 +10,7 @@
   import { setLocale } from '$lib/stores/locale';
   import { refreshSelf } from '$lib/stores/peers';
   import { saveSettings, settings } from '$lib/stores/settings';
+  import { applyTheme } from '$lib/stores/theme';
   import { showToast } from '$lib/stores/toasts';
   import { isCommandError, isTheme, THEMES } from '$lib/types';
   import { errorMessage } from '$lib/utils/errors';
@@ -49,7 +50,7 @@
 
   /** Like language, the theme applies at once and is saved with the other settings. */
   function changeTheme(value: string): void {
-    void setTheme(isTheme(value) ? value : null);
+    applyTheme(isTheme(value) ? value : null);
   }
 
   async function chooseFolder(): Promise<void> {

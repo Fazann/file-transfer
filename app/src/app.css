@@ -40,8 +40,34 @@
   color-scheme: light dark;
 }
 
+/* Dark tokens apply when chosen in Settings, or when following a system that prefers dark. */
+:root[data-theme='dark'] {
+  --color-background: #111418;
+  --color-surface: #1a1e24;
+  --color-surface-hover: #252a32;
+  --color-border: #313844;
+  --color-text: #e8ebef;
+  --color-text-muted: #9aa3ae;
+  --color-accent: #3b82f6;
+  --color-accent-strong: #93b8ff;
+  --color-accent-soft: #1e2b44;
+  --color-focus: #60a5fa;
+  --color-success: #4ade80;
+  --color-success-soft: #14321f;
+  --color-warning: #fbbf24;
+  --color-warning-soft: #3a2e10;
+  --color-danger: #ef5350;
+  --shadow-lg: 0 10px 30px rgb(0 0 0 / 50%);
+
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --color-background: #111418;
     --color-surface: #1a1e24;
     --color-surface-hover: #252a32;

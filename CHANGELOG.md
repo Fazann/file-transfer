@@ -7,6 +7,7 @@
   standard input when no text is given. Texts are never saved or logged.
 - Wire protocol version 7 adds `TextOffer`. Version 6 devices (LanShare 1.0) still send and receive files with this
   version; only texts need both devices updated.
+- Fixed: the light theme stayed dark on Linux desktops with a dark GTK theme, such as Ubuntu's.
 
 ## v1.0.0
 
